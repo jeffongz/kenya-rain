@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
   push:
     branches: [main]
-    paths: ['kenya-rain/**', '.github/workflows/update-forecast.yml']
+    paths: ['**/kenya-rain/**', '.github/workflows/update-forecast.yml']
 
 permissions:
   contents: read
@@ -17,17 +17,30 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-env:
-  PROJECT: kenya-rain   # path from the repo root, case-sensitive
-
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Check project folder
-        run: ls -la "$PROJECT"
+      - name: Locate project folder
+        run: |
+          F=$(find . -name ingest.py -not -path './.git/*' | head -n 1)
+          if [ -z "$F" ]; then
+            echo "::error::ingest.py was not found in the repository. Upload it next to index.html."
+            find . -maxdepth 4 -not -path './.git/*' | head -60
+            exit 1
+          fi
+          echo "PROJECT=$(dirname "$F")" >> "$GITHUB_ENV"
+          echo "Using folder: $(dirname "$F")"
+          ls -la "$(dirname "$F")"
+
+      - name: Check required files
+        run: |
+          for f in index.html styles.css script.js forecast-adapter.js ingest.py; do
+            [ -f "$PROJECT/$f" ] || { echo "::error::Missing $PROJECT/$f"; exit 1; }
+          done
 
       - uses: actions/setup-python@v5
         with:
@@ -40,16 +53,21 @@ jobs:
           pip install numpy scipy eccodes ecmwf-opendata
 
       - name: Ingest open-data forecasts
-        working-directory: ${{ env.PROJECT }}
         env:
           KPE_DATA: data
-        run: python ingest.py ecmwf_ifs gfs icon
+          KPE_DAYS: '7'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          cd "$PROJECT"
+          python ingest.py ecmwf_ifs gfs icon
+          ls -la data
 
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp "$PROJECT"/{index.html,styles.css,script.js,forecast-adapter.js} _site/
-          cp -r "$PROJECT"/data _site/data
+          cp "$PROJECT/index.html" "$PROJECT/styles.css" "$PROJECT/script.js" "$PROJECT/forecast-adapter.js" _site/
+          cp -r "$PROJECT/data" _site/data
+          ls -R _site
           cat _site/data/manifest.json
 
       - uses: actions/upload-pages-artifact@v3
