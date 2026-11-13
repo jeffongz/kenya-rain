@@ -1,0 +1,34 @@
+.kenya-precipitation-explorer{--kpe-bg:#fff;--kpe-fg:#1d2733;--kpe-muted:#5f6b7a;--kpe-line:#d5dbe3;--kpe-accent:#1a5fb4;
+  box-sizing:border-box;width:100%;max-width:100%;overflow:hidden;background:var(--kpe-bg);color:var(--kpe-fg);
+  font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;border:1px solid var(--kpe-line);border-radius:6px}
+.kenya-precipitation-explorer *{box-sizing:border-box}
+.kenya-precipitation-explorer .kpe-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:8px 10px}
+.kenya-precipitation-explorer .kpe-models{display:flex;flex-wrap:wrap;gap:4px}
+.kenya-precipitation-explorer button{font:inherit;color:inherit;background:#f2f5f8;border:1px solid var(--kpe-line);border-radius:4px;padding:5px 10px;cursor:pointer;min-height:34px}
+.kenya-precipitation-explorer button[aria-pressed="true"],.kenya-precipitation-explorer button[aria-selected="true"]{background:var(--kpe-accent);border-color:var(--kpe-accent);color:#fff}
+.kenya-precipitation-explorer button:disabled{opacity:.4;cursor:not-allowed}
+.kenya-precipitation-explorer .kpe-opacity{font-size:12px;color:var(--kpe-muted)}
+.kenya-precipitation-explorer .kpe-dates{display:flex;gap:4px;overflow-x:auto;padding:0 10px 8px;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.kenya-precipitation-explorer .kpe-dates button{flex:0 0 auto;min-width:68px;text-align:center;line-height:1.2}
+.kenya-precipitation-explorer .kpe-dates small{display:block;font-size:11px;opacity:.8}
+.kenya-precipitation-explorer .kpe-mapwrap{position:relative;width:100%;aspect-ratio:4/3;max-height:80vh}
+@media (min-width:800px){.kenya-precipitation-explorer .kpe-mapwrap{aspect-ratio:16/10}}
+.kenya-precipitation-explorer .kpe-map{position:absolute;inset:0}
+.kenya-precipitation-explorer .kpe-loading,.kenya-precipitation-explorer .kpe-message{position:absolute;z-index:5;left:50%;transform:translateX(-50%);
+  background:rgba(255,255,255,.95);border:1px solid var(--kpe-line);border-radius:4px;padding:6px 12px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.kenya-precipitation-explorer .kpe-loading{top:10px}
+.kenya-precipitation-explorer .kpe-message{top:50%;transform:translate(-50%,-50%);max-width:90%;text-align:center;color:#8a1c1c}
+.kenya-precipitation-explorer [hidden]{display:none!important}
+.kenya-precipitation-explorer .kpe-info{padding:10px}
+.kenya-precipitation-explorer .kpe-title{margin:0 0 6px;font-size:15px}
+.kenya-precipitation-explorer .kpe-legend{position:relative;padding-top:16px}
+.kenya-precipitation-explorer .kpe-bar{display:flex;height:16px;border:1px solid #888}
+.kenya-precipitation-explorer .kpe-bar i{flex:1}
+.kenya-precipitation-explorer .kpe-ticks{display:flex;font-size:10px;color:var(--kpe-muted)}
+.kenya-precipitation-explorer .kpe-ticks span{flex:1;text-align:center;overflow:visible;white-space:nowrap}
+.kenya-precipitation-explorer .kpe-ticks.top{position:absolute;top:0;left:0;right:0}
+.kenya-precipitation-explorer .kpe-meta{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:10px 0 0;font-size:13px}
+.kenya-precipitation-explorer .kpe-meta dt{color:var(--kpe-muted)}
+.kenya-precipitation-explorer .kpe-meta dd{margin:0}
+@media (max-width:560px){.kenya-precipitation-explorer .kpe-meta{grid-template-columns:1fr}.kenya-precipitation-explorer .kpe-meta dd{margin-bottom:4px}}
+.mapboxgl-popup-content .kpe-pop{font:13px/1.4 system-ui,sans-serif}

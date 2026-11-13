@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kenya precipitation forecast explorer</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<link href="styles.css" rel="stylesheet">
+</head><body>
+<!-- Set data-mapbox-token to your public Mapbox token (pk.…). -->
+<div class="kenya-precipitation-explorer" data-mapbox-token="pk.eyJ1Ijoic2thcm5sIiwiYSI6ImNrMzRtb29rcjEzbGUzY28yd2JiZTNkNWgifQ.BcdR077m5z3SR18u-dWClw" data-data-base="data">
+  <div class="kpe-controls">
+    <div class="kpe-models" role="group" aria-label="Model"></div>
+    <label class="kpe-opacity">Opacity <input type="range" min="20" max="100" value="85"></label>
+  </div>
+  <div class="kpe-dates" role="tablist" aria-label="Forecast date"></div>
+  <div class="kpe-mapwrap">
+    <div class="kpe-map"></div>
+    <div class="kpe-loading" hidden>Loading forecast…</div>
+    <div class="kpe-message" hidden></div>
+  </div>
+  <div class="kpe-info">
+    <h3 class="kpe-title">Precipitation, 24h (mm)</h3>
+    <div class="kpe-legend"></div>
+    <dl class="kpe-meta"></dl>
+  </div>
+</div>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<script src="forecast-adapter.js"></script>
+<script src="script.js"></script>
+</body></html>
+
