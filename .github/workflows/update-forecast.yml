@@ -1,0 +1,67 @@
+name: Update Kenya precipitation forecast
+
+on:
+  schedule:
+    - cron: '45 */6 * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['kenya-rain/**', '.github/workflows/update-forecast.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  PROJECT: kenya-rain   # path from the repo root, case-sensitive
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check project folder
+        run: ls -la "$PROJECT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libeccodes-dev
+          pip install numpy scipy eccodes ecmwf-opendata
+
+      - name: Ingest open-data forecasts
+        working-directory: ${{ env.PROJECT }}
+        env:
+          KPE_DATA: data
+        run: python ingest.py ecmwf_ifs gfs icon
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp "$PROJECT"/{index.html,styles.css,script.js,forecast-adapter.js} _site/
+          cp -r "$PROJECT"/data _site/data
+          cat _site/data/manifest.json
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
