@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
 """Ingest open NWP precipitation forecasts -> static JSON for the Kenya explorer.
 
-Usage:  python ingest.py [ecmwf_ifs gfs icon ...]     (default: all implemented models)
-Cron:   every 6 h, e.g.  30 */6 * * *  python /path/ingest.py
-Needs:  pip install numpy scipy eccodes ecmwf-opendata   (eccodes needs the ECMWF ecCodes library; `pip install eccodeslib` bundles it)
+Usage:
+  python ingest.py [--no-manifest] [ecmwf_ifs gfs icon ...]   (default: all implemented models)
+  python ingest.py --manifest                                 (rebuild manifest.json from status files)
+  python ingest.py --help
 
-Output: $KPE_DATA/<model>.json and $KPE_DATA/manifest.json (default dir: ./data)
+Cron (sequential — one process, all models, then manifest):
+  30 */6 * * *  python /path/ingest.py
+
+Cron / CI (parallel — each model in its own job; merge manifest once at the end):
+  30 */6 * * *  python /path/ingest.py --no-manifest ecmwf_ifs
+  30 */6 * * *  python /path/ingest.py --no-manifest gfs
+  30 */6 * * *  python /path/ingest.py --no-manifest icon
+  35 */6 * * *  python /path/ingest.py --manifest
+
+Needs:  pip install numpy scipy eccodes ecmwf-opendata
+        (eccodes needs the ECMWF ecCodes library; `pip install eccodeslib` bundles it)
+
+Output: $KPE_DATA/<model>.json, $KPE_DATA/<model>.status.json, $KPE_DATA/manifest.json
+        (default dir: ./data)
+
 Each day is a precipitation accumulation between two forecast steps: cum(b) - cum(a), in mm.
 Windows are EAT calendar days (21Z-21Z) when the model has steps there; otherwise shifted by +/-3 h or
 shortened (first day), and the ACTUAL start/end/hours are always written to the JSON.
+The forecast horizon defaults to 7 day-windows (override with KPE_DAYS); models that cannot reach that
+far simply produce fewer days.
 """
 import bz2, datetime as dt, json, os, re, sys, tempfile, urllib.error, urllib.request
 import numpy as np
@@ -21,6 +38,7 @@ LAT = np.arange(S, N + 1e-9, STEP)
 LL = np.array([(a, b) for a in LAT for b in LON])
 OUT = os.environ.get('KPE_DATA', 'data')
 UTC, EAT = dt.timezone.utc, dt.timezone(dt.timedelta(hours=3))
+DAYS = int(os.environ.get('KPE_DAYS', '7'))   # forecast day-windows; "where possible"
 
 
 def http(url, rng=None):
@@ -43,7 +61,7 @@ def runs(cycles, n=8):
 
 def windows(run, avail):
     out, d0 = [], run.astimezone(EAT).date()
-    for k in range(17):
+    for k in range(DAYS):
         day = d0 + dt.timedelta(days=k)
         mid = dt.datetime(day.year, day.month, day.day, tzinfo=EAT).astimezone(UTC)
         end = mid + dt.timedelta(hours=24)
@@ -114,9 +132,9 @@ def fetch_ecmwf():
     avail = set(range(0, 145, 3)) | set(range(150, 361, 6))
     for run in runs({0, 12}):
         wins = windows(run, avail)
-        need = sorted({s for w in wins for s in (w['a'], w['b'])} - {0})
         if not wins:
             continue
+        need = sorted({s for w in wins for s in (w['a'], w['b'])} - {0})
         with tempfile.TemporaryDirectory() as td:
             tgt = os.path.join(td, 'tp.grib2')
             try:
@@ -261,34 +279,87 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
-def main(names):
-    os.makedirs(OUT, exist_ok=True)
-    mp = os.path.join(OUT, 'manifest.json')
-    man = json.load(open(mp)) if os.path.exists(mp) else {'models': {}, 'errors': {}}
-    for name in names:
-        print('==', name)
+# ---------------- per-model job (safe to run in parallel with other models) ----------------
+def fetch_one(name):
+    print('==', name)
+    sp = os.path.join(OUT, name + '.status.json')
+    try:
+        run, wins, cum, source, res, wind = MODELS[name]()
+        days = []
+        for w in wins:
+            f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
+            days.append(dict(date=w['date'],
+                             start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'),
+                             end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
+                             hours=w['b'] - w['a'],
+                             partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
+                             values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
+            if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
+                k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
+                if abs(k - (w['a'] + w['b']) / 2) <= 6:
+                    cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
+                    days[-1]['wind'] = dict(step=k,
+                                            time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                            step_deg=STEP * 2,
+                                            u=cell(wind[k][0]), v=cell(wind[k][1]))
+        upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+        write_json(os.path.join(OUT, name + '.json'),
+                   dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
+                        updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N),
+                        step=STEP, days=days))
+        write_json(sp, dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)))
+    except Exception as e:
+        # Preserve any previous successful run's metadata so the site keeps showing the last good forecast.
+        old = {}
+        if os.path.exists(sp):
+            try:
+                with open(sp) as fh:
+                    old = json.load(fh)
+            except Exception:
+                pass
+        st = {k: old[k] for k in ('run', 'updated', 'days') if k in old}
+        st['error'] = str(e)
+        write_json(sp, st)
+        print('  FAILED:', e)
+
+
+# ---------------- manifest merge (run once, after all per-model jobs) ----------------
+def merge_manifest():
+    man = {'models': {}, 'errors': {}}
+    for name in MODELS:
+        sp = os.path.join(OUT, name + '.status.json')
+        if not os.path.exists(sp):
+            continue
         try:
-            run, wins, cum, source, res, wind = MODELS[name]()
-            days = []
-            for w in wins:
-                f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
-                days.append(dict(date=w['date'], start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'), end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
-                                 hours=w['b'] - w['a'], partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
-                                 values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
-                if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
-                    k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
-                    if abs(k - (w['a'] + w['b']) / 2) <= 6:
-                        cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
-                        days[-1]['wind'] = dict(step=k, time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'), step_deg=STEP * 2,
-                                                u=cell(wind[k][0]), v=cell(wind[k][1]))
-            upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-            write_json(os.path.join(OUT, name + '.json'), dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
-                       updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
-            man['models'][name] = dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)); man['errors'].pop(name, None)
+            with open(sp) as f:
+                st = json.load(f)
         except Exception as e:
-            man['errors'][name] = str(e); print('  FAILED:', e)
-    write_json(mp, man)
+            man['errors'][name] = 'unreadable status: %s' % e
+            continue
+        if 'run' in st:
+            man['models'][name] = {k: st[k] for k in ('run', 'updated', 'days') if k in st}
+        if 'error' in st:
+            man['errors'][name] = st['error']
+    write_json(os.path.join(OUT, 'manifest.json'), man)
+
+
+def main(argv):
+    if '--help' in argv or '-h' in argv:
+        print(__doc__); return
+    os.makedirs(OUT, exist_ok=True)
+    if argv == ['--manifest']:
+        merge_manifest(); return
+    no_man = '--no-manifest' in argv
+    names = [a for a in argv if not a.startswith('--')]
+    if not names:
+        names = list(MODELS)
+    for name in names:
+        if name not in MODELS:
+            print('unknown model:', name, file=sys.stderr); continue
+        fetch_one(name)
+    if not no_man:
+        merge_manifest()
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:] or list(MODELS))
+    main(sys.argv[1:])
