@@ -56,6 +56,19 @@ def windows(run, avail):
     return out
 
 
+def mid_step(w, avail):
+    """available forecast step nearest the middle of the accumulation window (wind snapshot)"""
+    t = (w['a'] + w['b']) / 2
+    return min(avail, key=lambda s: (abs(s - t), s))
+
+
+def safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:  # wind is optional: never lose rainfall because of it
+        print('  wind skipped:', e); return {}
+
+
 def read_msgs(path, coords=True):
     res = []
     with open(path, 'rb') as f:
@@ -64,7 +77,7 @@ def read_msgs(path, coords=True):
             if h is None:
                 break
             try:
-                m = dict(step=eccodes.codes_get(h, 'endStep'), val=eccodes.codes_get_values(h))
+                m = dict(step=eccodes.codes_get(h, 'endStep'), name=eccodes.codes_get(h, 'shortName'), val=eccodes.codes_get_values(h))
                 if coords:
                     m['lat'] = eccodes.codes_get_array(h, 'latitudes'); m['lon'] = eccodes.codes_get_array(h, 'longitudes')
                 res.append(m)
@@ -82,6 +95,16 @@ def regrid(lat, lon, val):
 
 
 ZERO = np.zeros((len(LAT), len(LON)))
+
+
+def ecmwf_wind(client, run, steps):
+    with tempfile.TemporaryDirectory() as td:
+        tgt = os.path.join(td, 'uv.grib2')
+        client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=steps, param=['10u', '10v'], target=tgt)
+        got = {}
+        for m in read_msgs(tgt):
+            got.setdefault(int(m['step']), {})[m['name']] = regrid(m['lat'], m['lon'], m['val'])
+    return {s: (d['10u'], d['10v']) for s, d in got.items() if '10u' in d and '10v' in d}
 
 
 # ---------------- ECMWF IFS open data (CC-BY-4.0) via the official ecmwf-opendata client ----------------
@@ -103,7 +126,8 @@ def fetch_ecmwf():
             cum = {0: ZERO}
             for m in read_msgs(tgt):
                 cum[int(m['step'])] = regrid(m['lat'], m['lon'], m['val'] * 1000.0)  # tp is metres
-        return run, wins, cum, 'ECMWF Open Data (CC-BY-4.0)', '0.25°'
+        wind = safe(ecmwf_wind, client, run, sorted({mid_step(w, avail) for w in wins}))
+        return run, wins, cum, 'ECMWF Open Data (CC-BY-4.0)', '0.25°', wind
     raise RuntimeError('no ECMWF run available')
 
 
@@ -126,6 +150,23 @@ def gfs_records(run, step):
                 end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else ''
                 recs.append((int(mm.group(1)), int(mm.group(2)), '%s-%s' % (p[1], end)))
     return recs
+
+
+def gfs_wind(run, steps):
+    out = {}
+    for f in steps:
+        lines = http(gfs_url(run, f) + '.idx').decode().splitlines(); got = {}
+        for i, ln in enumerate(lines):
+            p = ln.split(':')
+            if len(p) > 4 and p[3] in ('UGRD', 'VGRD') and p[4] == '10 m above ground':
+                end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else ''
+                with tempfile.NamedTemporaryFile(suffix='.grib2') as tf:
+                    tf.write(http(gfs_url(run, f), '%s-%s' % (p[1], end))); tf.flush()
+                    m = read_msgs(tf.name)[0]
+                got[p[3]] = regrid(m['lat'], m['lon'], m['val'])
+        if len(got) == 2:
+            out[f] = (got['UGRD'], got['VGRD'])
+    return out
 
 
 def fetch_gfs():
@@ -151,7 +192,8 @@ def fetch_gfs():
             return cache[f]
         for w in wins:
             cum(w['a']); cum(w['b'])
-        return run, wins, cache, 'NOAA GFS (public domain)', '0.25°'
+        wind = safe(gfs_wind, run, sorted({mid_step(w, avail) for w in wins}))
+        return run, wins, cache, 'NOAA GFS (public domain)', '0.25°', wind
     raise RuntimeError('no GFS run available')
 
 
@@ -186,7 +228,17 @@ def fetch_icon():
         for s in need:
             v = grab('TOT_PREC', 'tot_prec', s, 'single-level')[m][idx].astype(float)
             v[d > 0.3] = np.nan; cum[s] = v.reshape(len(LAT), len(LON))
-        return run, wins, cum, 'DWD ICON open data (CC BY 4.0)', '~13 km native, 0.25° shown'
+        def wind_icon():
+            out = {}
+            for s in sorted({mid_step(w, avail) for w in wins}):
+                uv = []
+                for var in ('U_10M', 'V_10M'):
+                    v = grab(var, var.lower(), s, 'single-level')[m][idx].astype(float); v[d > 0.3] = np.nan
+                    uv.append(v.reshape(len(LAT), len(LON)))
+                out[s] = tuple(uv)
+            return out
+        wind = safe(wind_icon)
+        return run, wins, cum, 'DWD ICON open data (CC BY 4.0)', '~13 km native, 0.25° shown', wind
     raise RuntimeError('no ICON run available')
 
 
@@ -216,13 +268,19 @@ def main(names):
     for name in names:
         print('==', name)
         try:
-            run, wins, cum, source, res = MODELS[name]()
+            run, wins, cum, source, res, wind = MODELS[name]()
             days = []
             for w in wins:
                 f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
                 days.append(dict(date=w['date'], start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'), end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
                                  hours=w['b'] - w['a'], partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
                                  values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
+                if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
+                    k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
+                    if abs(k - (w['a'] + w['b']) / 2) <= 6:
+                        cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
+                        days[-1]['wind'] = dict(step=k, time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'), step_deg=STEP * 2,
+                                                u=cell(wind[k][0]), v=cell(wind[k][1]))
             upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
             write_json(os.path.join(OUT, name + '.json'), dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
                        updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
