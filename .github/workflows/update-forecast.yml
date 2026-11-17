@@ -51,7 +51,7 @@ jobs:
         env:
           KPE_DATA: data
           KPE_DAYS: '7'
-          KPE_BUDGET: '720'
+          KPE_BUDGET: '600'
           PYTHONUNBUFFERED: '1'
         run: |
           cd "$PROJECT"
