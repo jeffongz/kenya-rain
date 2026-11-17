@@ -1,33 +1,16 @@
 #!/usr/bin/env python3
 """Ingest open NWP precipitation forecasts -> static JSON for the Kenya explorer.
 
-Usage:
-  python ingest.py [--no-manifest] [ecmwf_ifs gfs icon ...]   (default: all implemented models)
-  python ingest.py --manifest                                 (rebuild manifest.json from status files)
-  python ingest.py --help
+Usage:  python ingest.py [ecmwf_ifs gfs icon ...]     (default: all implemented models)
+Cron:   every 6 h, e.g.  30 */6 * * *  python /path/ingest.py
+Needs:  pip install numpy scipy eccodes ecmwf-opendata   (eccodes needs the ECMWF ecCodes library; `pip install eccodeslib` bundles it)
 
-Cron (sequential — one process, all models, then manifest):
-  30 */6 * * *  python /path/ingest.py
-
-Cron / CI (parallel — each model in its own job; merge manifest once at the end):
-  30 */6 * * *  python /path/ingest.py --no-manifest ecmwf_ifs
-  30 */6 * * *  python /path/ingest.py --no-manifest gfs
-  30 */6 * * *  python /path/ingest.py --no-manifest icon
-  35 */6 * * *  python /path/ingest.py --manifest
-
-Needs:  pip install numpy scipy eccodes ecmwf-opendata
-        (eccodes needs the ECMWF ecCodes library; `pip install eccodeslib` bundles it)
-
-Output: $KPE_DATA/<model>.json, $KPE_DATA/<model>.status.json, $KPE_DATA/manifest.json
-        (default dir: ./data)
-
+Output: $KPE_DATA/<model>.json and $KPE_DATA/manifest.json (default dir: ./data)
 Each day is a precipitation accumulation between two forecast steps: cum(b) - cum(a), in mm.
 Windows are EAT calendar days (21Z-21Z) when the model has steps there; otherwise shifted by +/-3 h or
 shortened (first day), and the ACTUAL start/end/hours are always written to the JSON.
-The forecast horizon defaults to 7 day-windows (override with KPE_DAYS); models that cannot reach that
-far simply produce fewer days.
 """
-import bz2, datetime as dt, json, os, re, sys, tempfile, urllib.error, urllib.request
+import bz2, datetime as dt, json, os, re, sys, tempfile, time, urllib.error, urllib.request
 import numpy as np
 import eccodes
 from scipy.spatial import cKDTree
@@ -38,15 +21,31 @@ LAT = np.arange(S, N + 1e-9, STEP)
 LL = np.array([(a, b) for a in LAT for b in LON])
 OUT = os.environ.get('KPE_DATA', 'data')
 UTC, EAT = dt.timezone.utc, dt.timezone(dt.timedelta(hours=3))
-DAYS = int(os.environ.get('KPE_DAYS', '7'))   # forecast day-windows; "where possible"
+
+
+DEADLINE = float('inf')  # set per model in main(): stop instead of hanging the whole job
 
 
 def http(url, rng=None):
-    req = urllib.request.Request(url, headers={'User-Agent': 'kenya-precip-explorer/1.0'})
-    if rng:
-        req.add_header('Range', 'bytes=' + rng)
-    with urllib.request.urlopen(req, timeout=180) as r:
-        return r.read()
+    err = None
+    for attempt in range(3):
+        if time.time() > DEADLINE:
+            raise TimeoutError('time budget for this model exhausted')
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'kenya-precip-explorer/1.0'})
+            if rng:
+                req.add_header('Range', 'bytes=' + rng)
+            print('  GET', url[-85:], flush=True)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 404):
+                raise
+            err = e
+        except Exception as e:
+            err = e
+        time.sleep(2 * (attempt + 1))
+    raise err
 
 
 def runs(cycles, n=8):
@@ -61,7 +60,7 @@ def runs(cycles, n=8):
 
 def windows(run, avail):
     out, d0 = [], run.astimezone(EAT).date()
-    for k in range(DAYS):
+    for k in range(int(os.environ.get('KPE_DAYS', '7')) + 1):
         day = d0 + dt.timedelta(days=k)
         mid = dt.datetime(day.year, day.month, day.day, tzinfo=EAT).astimezone(UTC)
         end = mid + dt.timedelta(hours=24)
@@ -97,18 +96,38 @@ def read_msgs(path, coords=True):
             try:
                 m = dict(step=eccodes.codes_get(h, 'endStep'), name=eccodes.codes_get(h, 'shortName'), val=eccodes.codes_get_values(h))
                 if coords:
-                    m['lat'] = eccodes.codes_get_array(h, 'latitudes'); m['lon'] = eccodes.codes_get_array(h, 'longitudes')
+                    m['key'] = grid_key(h)
+                    if m['key'] is None or m['key'] not in _GRID:  # coordinates only needed once per grid
+                        m['lat'] = eccodes.codes_get_array(h, 'latitudes'); m['lon'] = eccodes.codes_get_array(h, 'longitudes')
                 res.append(m)
             finally:
                 eccodes.codes_release(h)
     return res
 
 
-def regrid(lat, lon, val):
-    lon = np.where(lon > 180, lon - 360, lon)
-    m = (lat >= S - 1) & (lat <= N + 1) & (lon >= W - 1) & (lon <= E + 1)
-    d, i = cKDTree(np.c_[lat[m], lon[m]]).query(LL)
-    out = np.asarray(val[m][i], dtype=float); out[d > 0.3] = np.nan
+_GRID = {}
+
+
+def grid_key(h):
+    try:
+        return tuple(eccodes.codes_get(h, k) for k in ('Ni', 'Nj', 'latitudeOfFirstGridPointInDegrees', 'longitudeOfFirstGridPointInDegrees',
+                                                      'latitudeOfLastGridPointInDegrees', 'longitudeOfLastGridPointInDegrees'))
+    except Exception:
+        return None
+
+
+def regrid(m, val):
+    key = m.get('key')
+    if key is not None and key in _GRID:
+        sel, idx, far = _GRID[key]
+    else:
+        lat, lon = m['lat'], m['lon']
+        lon = np.where(lon > 180, lon - 360, lon)
+        sel = (lat >= S - 1) & (lat <= N + 1) & (lon >= W - 1) & (lon <= E + 1)
+        d, idx = cKDTree(np.c_[lat[sel], lon[sel]]).query(LL); far = d > 0.3
+        if key is not None:
+            _GRID[key] = (sel, idx, far)
+    out = np.asarray(val[sel][idx], dtype=float); out[far] = np.nan
     return out.reshape(len(LAT), len(LON))
 
 
@@ -121,7 +140,7 @@ def ecmwf_wind(client, run, steps):
         client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=steps, param=['10u', '10v'], target=tgt)
         got = {}
         for m in read_msgs(tgt):
-            got.setdefault(int(m['step']), {})[m['name']] = regrid(m['lat'], m['lon'], m['val'])
+            got.setdefault(int(m['step']), {})[m['name']] = regrid(m, m['val'])
     return {s: (d['10u'], d['10v']) for s, d in got.items() if '10u' in d and '10v' in d}
 
 
@@ -132,9 +151,9 @@ def fetch_ecmwf():
     avail = set(range(0, 145, 3)) | set(range(150, 361, 6))
     for run in runs({0, 12}):
         wins = windows(run, avail)
+        need = sorted({s for w in wins for s in (w['a'], w['b'])} - {0})
         if not wins:
             continue
-        need = sorted({s for w in wins for s in (w['a'], w['b'])} - {0})
         with tempfile.TemporaryDirectory() as td:
             tgt = os.path.join(td, 'tp.grib2')
             try:
@@ -143,7 +162,7 @@ def fetch_ecmwf():
                 print('  ecmwf', run, 'skipped:', e); continue
             cum = {0: ZERO}
             for m in read_msgs(tgt):
-                cum[int(m['step'])] = regrid(m['lat'], m['lon'], m['val'] * 1000.0)  # tp is metres
+                cum[int(m['step'])] = regrid(m, m['val'] * 1000.0)  # tp is metres
         wind = safe(ecmwf_wind, client, run, sorted({mid_step(w, avail) for w in wins}))
         return run, wins, cum, 'ECMWF Open Data (CC-BY-4.0)', '0.25°', wind
     raise RuntimeError('no ECMWF run available')
@@ -181,7 +200,7 @@ def gfs_wind(run, steps):
                 with tempfile.NamedTemporaryFile(suffix='.grib2') as tf:
                     tf.write(http(gfs_url(run, f), '%s-%s' % (p[1], end))); tf.flush()
                     m = read_msgs(tf.name)[0]
-                got[p[3]] = regrid(m['lat'], m['lon'], m['val'])
+                got[p[3]] = regrid(m, m['val'])
         if len(got) == 2:
             out[f] = (got['UGRD'], got['VGRD'])
     return out
@@ -206,7 +225,7 @@ def fetch_gfs():
             with tempfile.NamedTemporaryFile(suffix='.grib2') as tf:
                 tf.write(http(gfs_url(run, f), r[2])); tf.flush()
                 m = read_msgs(tf.name)[0]
-            cache[f] = regrid(m['lat'], m['lon'], m['val']) + (cum(r[0]) if r[0] > 0 else 0)
+            cache[f] = regrid(m, m['val']) + (cum(r[0]) if r[0] > 0 else 0)
             return cache[f]
         for w in wins:
             cum(w['a']); cum(w['b'])
@@ -279,87 +298,36 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
-# ---------------- per-model job (safe to run in parallel with other models) ----------------
-def fetch_one(name):
-    print('==', name)
-    sp = os.path.join(OUT, name + '.status.json')
-    try:
-        run, wins, cum, source, res, wind = MODELS[name]()
-        days = []
-        for w in wins:
-            f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
-            days.append(dict(date=w['date'],
-                             start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'),
-                             end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
-                             hours=w['b'] - w['a'],
-                             partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
-                             values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
-            if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
-                k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
-                if abs(k - (w['a'] + w['b']) / 2) <= 6:
-                    cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
-                    days[-1]['wind'] = dict(step=k,
-                                            time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                                            step_deg=STEP * 2,
-                                            u=cell(wind[k][0]), v=cell(wind[k][1]))
-        upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-        write_json(os.path.join(OUT, name + '.json'),
-                   dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
-                        updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N),
-                        step=STEP, days=days))
-        write_json(sp, dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)))
-    except Exception as e:
-        # Preserve any previous successful run's metadata so the site keeps showing the last good forecast.
-        old = {}
-        if os.path.exists(sp):
-            try:
-                with open(sp) as fh:
-                    old = json.load(fh)
-            except Exception:
-                pass
-        st = {k: old[k] for k in ('run', 'updated', 'days') if k in old}
-        st['error'] = str(e)
-        write_json(sp, st)
-        print('  FAILED:', e)
-
-
-# ---------------- manifest merge (run once, after all per-model jobs) ----------------
-def merge_manifest():
-    man = {'models': {}, 'errors': {}}
-    for name in MODELS:
-        sp = os.path.join(OUT, name + '.status.json')
-        if not os.path.exists(sp):
-            continue
-        try:
-            with open(sp) as f:
-                st = json.load(f)
-        except Exception as e:
-            man['errors'][name] = 'unreadable status: %s' % e
-            continue
-        if 'run' in st:
-            man['models'][name] = {k: st[k] for k in ('run', 'updated', 'days') if k in st}
-        if 'error' in st:
-            man['errors'][name] = st['error']
-    write_json(os.path.join(OUT, 'manifest.json'), man)
-
-
-def main(argv):
-    if '--help' in argv or '-h' in argv:
-        print(__doc__); return
+def main(names):
+    global DEADLINE
     os.makedirs(OUT, exist_ok=True)
-    if argv == ['--manifest']:
-        merge_manifest(); return
-    no_man = '--no-manifest' in argv
-    names = [a for a in argv if not a.startswith('--')]
-    if not names:
-        names = list(MODELS)
+    mp = os.path.join(OUT, 'manifest.json')
+    man = json.load(open(mp)) if os.path.exists(mp) else {'models': {}, 'errors': {}}
     for name in names:
-        if name not in MODELS:
-            print('unknown model:', name, file=sys.stderr); continue
-        fetch_one(name)
-    if not no_man:
-        merge_manifest()
+        print('==', name, flush=True)
+        DEADLINE = time.time() + int(os.environ.get('KPE_BUDGET', '600'))
+        try:
+            run, wins, cum, source, res, wind = MODELS[name]()
+            days = []
+            for w in wins:
+                f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
+                days.append(dict(date=w['date'], start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'), end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                 hours=w['b'] - w['a'], partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
+                                 values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
+                if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
+                    k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
+                    if abs(k - (w['a'] + w['b']) / 2) <= 6:
+                        cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
+                        days[-1]['wind'] = dict(step=k, time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'), step_deg=STEP * 2,
+                                                u=cell(wind[k][0]), v=cell(wind[k][1]))
+            upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+            write_json(os.path.join(OUT, name + '.json'), dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
+                       updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
+            man['models'][name] = dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)); man['errors'].pop(name, None)
+        except Exception as e:
+            man['errors'][name] = str(e); print('  FAILED:', e)
+    write_json(mp, man)
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main(sys.argv[1:] or list(MODELS))
