@@ -18,29 +18,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # Each model runs as its own parallel job, so one slow or failing model cannot block the others.
+  ingest:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [ecmwf_ifs, gfs, icon]
     steps:
       - uses: actions/checkout@v5
 
       - name: Locate project folder
         run: |
           F=$(find . -name ingest.py -not -path './.git/*' | head -n 1)
-          if [ -z "$F" ]; then
-            echo "::error::ingest.py was not found in the repository. Upload it next to index.html."
-            find . -maxdepth 4 -not -path './.git/*' | head -60
-            exit 1
-          fi
+          [ -n "$F" ] || { echo "::error::ingest.py not found in the repository"; exit 1; }
           echo "PROJECT=$(dirname "$F")" >> "$GITHUB_ENV"
-          echo "Using folder: $(dirname "$F")"
-          ls -la "$(dirname "$F")"
-
-      - name: Check required files
-        run: |
-          for f in index.html styles.css script.js forecast-adapter.js ingest.py; do
-            [ -f "$PROJECT/$f" ] || { echo "::error::Missing $PROJECT/$f"; exit 1; }
-          done
 
       - uses: actions/setup-python@v5
         with:
@@ -52,30 +46,58 @@ jobs:
           sudo apt-get install -y -qq libeccodes-dev
           pip install numpy scipy eccodes ecmwf-opendata
 
-      - name: Ingest open-data forecasts
+      - name: Ingest ${{ matrix.model }}
+        timeout-minutes: 15
         env:
           KPE_DATA: data
           KPE_DAYS: '7'
+          KPE_BUDGET: '720'
           PYTHONUNBUFFERED: '1'
         run: |
           cd "$PROJECT"
-          python ingest.py ecmwf_ifs gfs icon
+          python ingest.py ${{ matrix.model }}
           ls -la data
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: data-${{ matrix.model }}
+          path: ${{ env.PROJECT }}/data/${{ matrix.model }}.json
+          if-no-files-found: warn
+
+  assemble:
+    needs: ingest
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Locate project folder
+        run: |
+          F=$(find . -name ingest.py -not -path './.git/*' | head -n 1)
+          [ -n "$F" ] || { echo "::error::ingest.py not found in the repository"; exit 1; }
+          echo "PROJECT=$(dirname "$F")" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: data-*
+          merge-multiple: true
+          path: _site/data
 
       - name: Assemble site
         run: |
-          mkdir -p _site
-          cp "$PROJECT/index.html" "$PROJECT/styles.css" "$PROJECT/script.js" "$PROJECT/forecast-adapter.js" _site/
-          cp -r "$PROJECT/data" _site/data
-          ls -R _site
-          cat _site/data/manifest.json
+          mkdir -p _site/data
+          for f in index.html styles.css script.js forecast-adapter.js; do cp "$PROJECT/$f" _site/; done
+          ls -la _site/data
+          ls _site/data/*.json >/dev/null 2>&1 || { echo "::error::No model produced data; see the ingest jobs."; exit 1; }
 
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
   deploy:
-    needs: build
+    needs: assemble
     runs-on: ubuntu-latest
     environment:
       name: github-pages
