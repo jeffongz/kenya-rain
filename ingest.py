@@ -10,7 +10,7 @@ Each day is a precipitation accumulation between two forecast steps: cum(b) - cu
 Windows are EAT calendar days (21Z-21Z) when the model has steps there; otherwise shifted by +/-3 h or
 shortened (first day), and the ACTUAL start/end/hours are always written to the JSON.
 """
-import bz2, datetime as dt, json, os, re, sys, tempfile, time, urllib.error, urllib.request
+import bz2, signal, datetime as dt, json, os, re, sys, tempfile, time, urllib.error, urllib.request
 import numpy as np
 import eccodes
 from scipy.spatial import cKDTree
@@ -147,25 +147,30 @@ def ecmwf_wind(client, run, steps):
 # ---------------- ECMWF IFS open data (CC-BY-4.0) via the official ecmwf-opendata client ----------------
 def fetch_ecmwf():
     from ecmwf.opendata import Client
-    client = Client(source=os.environ.get('ECMWF_SOURCE', 'aws'))  # ecmwf | aws | azure | google
+    # The library's defaults retry 500 times with 120 s pauses, which stalls the job on a 503. Fail fast and try other mirrors.
+    first = os.environ.get('ECMWF_SOURCE')
+    sources = ([first] if first else []) + [x for x in ('aws', 'google', 'azure', 'ecmwf') if x != first]
     avail = set(range(0, 145, 3)) | set(range(150, 361, 6))
-    for run in runs({0, 12}):
+    for run in runs({0, 12}, 4):
         wins = windows(run, avail)
         need = sorted({s for w in wins for s in (w['a'], w['b'])} - {0})
         if not wins:
             continue
-        with tempfile.TemporaryDirectory() as td:
-            tgt = os.path.join(td, 'tp.grib2')
-            try:
-                client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=need, param='tp', target=tgt)
-            except Exception as e:  # run not yet published / expired
-                print('  ecmwf', run, 'skipped:', e); continue
-            cum = {0: ZERO}
-            for m in read_msgs(tgt):
-                cum[int(m['step'])] = regrid(m, m['val'] * 1000.0)  # tp is metres
-        wind = safe(ecmwf_wind, client, run, sorted({mid_step(w, avail) for w in wins}))
-        return run, wins, cum, 'ECMWF Open Data (CC-BY-4.0)', '0.25°', wind
-    raise RuntimeError('no ECMWF run available')
+        for src in sources:
+            with tempfile.TemporaryDirectory() as td:
+                tgt = os.path.join(td, 'tp.grib2')
+                try:
+                    client = Client(source=src, maximum_retries=3, retry_after=10, use_server_retry_after=False)  # azure builds a token here
+                    client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=need, param='tp', target=tgt)
+                except Exception as e:  # mirror overloaded, or run not published there yet
+                    print('  ecmwf', src, run, 'failed:', str(e)[:120], flush=True); continue
+                cum = {0: ZERO}
+                for m in read_msgs(tgt):
+                    cum[int(m['step'])] = regrid(m, m['val'] * 1000.0)  # tp is metres
+            print('  ecmwf source:', src, run, flush=True)
+            wind = safe(ecmwf_wind, client, run, sorted({mid_step(w, avail) for w in wins}))
+            return run, wins, cum, 'ECMWF Open Data (CC-BY-4.0)', '0.25°', wind
+    raise RuntimeError('no ECMWF run available from any mirror')
 
 
 # ---------------- GFS 0.25 deg on the NOAA AWS bucket: .idx + HTTP range ----------------
@@ -298,6 +303,10 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
+def _alarm(signum, frame):
+    raise TimeoutError('time budget for this model exhausted')
+
+
 def main(names):
     global DEADLINE
     os.makedirs(OUT, exist_ok=True)
@@ -306,6 +315,8 @@ def main(names):
     for name in names:
         print('==', name, flush=True)
         DEADLINE = time.time() + int(os.environ.get('KPE_BUDGET', '600'))
+        if hasattr(signal, 'SIGALRM'):  # hard stop even if a library call hangs
+            signal.signal(signal.SIGALRM, _alarm); signal.alarm(int(os.environ.get('KPE_BUDGET', '600')))
         try:
             run, wins, cum, source, res, wind = MODELS[name]()
             days = []
@@ -326,6 +337,8 @@ def main(names):
             man['models'][name] = dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)); man['errors'].pop(name, None)
         except Exception as e:
             man['errors'][name] = str(e); print('  FAILED:', e)
+    if hasattr(signal, 'SIGALRM'):
+        signal.alarm(0)
     write_json(mp, man)
 
 
