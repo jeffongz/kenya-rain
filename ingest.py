@@ -10,12 +10,12 @@ Each day is a precipitation accumulation between two forecast steps: cum(b) - cu
 Windows are EAT calendar days (21Z-21Z) when the model has steps there; otherwise shifted by +/-3 h or
 shortened (first day), and the ACTUAL start/end/hours are always written to the JSON.
 """
-import bz2, signal, datetime as dt, json, os, re, sys, tempfile, time, urllib.error, urllib.request
+import bz2, glob, hashlib, signal, datetime as dt, json, os, re, sys, tempfile, time, urllib.error, urllib.request
 import numpy as np
 import eccodes
 from scipy.spatial import cKDTree
 
-W, E, S, N, STEP = 28.0, 52.0, -12.0, 15.0, 0.25
+W, E, S, N, STEP = -26.0, 60.0, -36.0, 38.0, 0.25   # all of Africa (Cape Verde to Mauritius). Keep (E-W)/STEP and (N-S)/STEP EVEN: the 0.5 deg wind grid reuses every 2nd point
 LON = np.arange(W, E + 1e-9, STEP)
 LAT = np.arange(S, N + 1e-9, STEP)
 LL = np.array([(a, b) for a in LAT for b in LON])
@@ -129,6 +129,11 @@ def regrid(m, val):
             _GRID[key] = (sel, idx, far)
     out = np.asarray(val[sel][idx], dtype=float); out[far] = np.nan
     return out.reshape(len(LAT), len(LON))
+
+
+def r1(x):  # 1 decimal; whole numbers written as ints (smaller files: most of the continent is dry)
+    v = round(float(x), 1)
+    return int(v) if v == int(v) else v
 
 
 ZERO = np.zeros((len(LAT), len(LON)))
@@ -303,6 +308,20 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
+def write_unique(name, run, obj):
+    """Save as <model>_<run YYYYMMDDHH>_<sha1 of content>.json: a new name for every new forecast, so no cache can serve a stale copy."""
+    body = json.dumps(obj, separators=(',', ':'))
+    fname = '%s_%s_%s.json' % (name, run.strftime('%Y%m%d%H'), hashlib.sha1(body.encode()).hexdigest()[:8])
+    tmp = os.path.join(OUT, fname + '.tmp')
+    with open(tmp, 'w') as f:
+        f.write(body)
+    os.replace(tmp, os.path.join(OUT, fname))
+    old = sorted(glob.glob(os.path.join(OUT, name + '_*.json')), key=os.path.getmtime, reverse=True)[3:]  # keep the newest 3
+    for o in old:
+        os.remove(o)
+    return fname
+
+
 def _alarm(signum, frame):
     raise TimeoutError('time budget for this model exhausted')
 
@@ -310,7 +329,7 @@ def _alarm(signum, frame):
 def main(names):
     global DEADLINE
     os.makedirs(OUT, exist_ok=True)
-    mp = os.path.join(OUT, 'manifest.json')
+    mp = os.path.join(OUT, 'latest.json')  # the only fixed-name file: points at the current unique file of each model
     man = json.load(open(mp)) if os.path.exists(mp) else {'models': {}, 'errors': {}}
     for name in names:
         print('==', name, flush=True)
@@ -324,7 +343,7 @@ def main(names):
                 f = np.clip(cum[w['b']] - cum[w['a']], 0, None)
                 days.append(dict(date=w['date'], start=w['start'].strftime('%Y-%m-%dT%H:%M:%SZ'), end=w['end'].strftime('%Y-%m-%dT%H:%M:%SZ'),
                                  hours=w['b'] - w['a'], partial=w['a'] == 0 and w['start'] > w['end'] - dt.timedelta(hours=24),
-                                 values=[None if np.isnan(x) else round(float(x), 1) for x in f.ravel()]))
+                                 values=[None if np.isnan(x) else r1(x) for x in f.ravel()]))
                 if wind:  # 10 m wind snapshot near the middle of the window, stored at 0.5 deg to keep files small
                     k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
                     if abs(k - (w['a'] + w['b']) / 2) <= 6:
@@ -332,13 +351,17 @@ def main(names):
                         days[-1]['wind'] = dict(step=k, time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'), step_deg=STEP * 2,
                                                 u=cell(wind[k][0]), v=cell(wind[k][1]))
             upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-            write_json(os.path.join(OUT, name + '.json'), dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
-                       updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
-            man['models'][name] = dict(run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days)); man['errors'].pop(name, None)
+            fname = write_unique(name, run, dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
+                                 updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
+            entry = dict(file=fname, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), updated=upd, days=len(days))
+            man['models'][name] = entry; man['errors'].pop(name, None)
+            write_json(os.path.join(OUT, '_ptr_%s.json' % name), dict(model=name, **entry))  # fragment merged into latest.json by the workflow
+            print('  wrote', fname, flush=True)
         except Exception as e:
             man['errors'][name] = str(e); print('  FAILED:', e)
     if hasattr(signal, 'SIGALRM'):
         signal.alarm(0)
+    man['generated'] = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
     write_json(mp, man)
 
 
