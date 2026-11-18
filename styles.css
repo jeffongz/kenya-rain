@@ -1,34 +1,123 @@
-.kenya-precipitation-explorer{--kpe-bg:#fff;--kpe-fg:#1d2733;--kpe-muted:#5f6b7a;--kpe-line:#d5dbe3;--kpe-accent:#1a5fb4;
-  box-sizing:border-box;width:100%;max-width:100%;overflow:hidden;background:var(--kpe-bg);color:var(--kpe-fg);
-  font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;border:1px solid var(--kpe-line);border-radius:6px}
+.kenya-precipitation-explorer{--bg:#17212d;--panel:rgba(30,45,62,.94);--panel2:#2c4259;--txt:#eef3f8;--mut:#9fb2c6;--acc:#3d7bd9;--tl:#dfe5ec;--tlt:#1b2733;--line:#b4bfcc;
+  container-type:inline-size;position:relative;display:flex;flex-direction:column;width:100%;max-width:100%;height:100vh;
+  overflow:hidden;isolation:isolate;background:var(--bg);color:var(--txt);border-radius:8px;font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .kenya-precipitation-explorer *{box-sizing:border-box}
-.kenya-precipitation-explorer .kpe-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:8px 10px}
-.kenya-precipitation-explorer .kpe-models{display:flex;flex-wrap:wrap;gap:4px}
-.kenya-precipitation-explorer button{font:inherit;color:inherit;background:#f2f5f8;border:1px solid var(--kpe-line);border-radius:4px;padding:5px 10px;cursor:pointer;min-height:34px}
-.kenya-precipitation-explorer button[aria-pressed="true"],.kenya-precipitation-explorer button[aria-selected="true"]{background:var(--kpe-accent);border-color:var(--kpe-accent);color:#fff}
-.kenya-precipitation-explorer button:disabled{opacity:.4;cursor:not-allowed}
-.kenya-precipitation-explorer .kpe-opacity{font-size:12px;color:var(--kpe-muted)}
-.kenya-precipitation-explorer .kpe-dates{display:flex;gap:4px;overflow-x:auto;padding:0 10px 8px;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
-.kenya-precipitation-explorer .kpe-dates button{flex:0 0 auto;min-width:68px;text-align:center;line-height:1.2}
-.kenya-precipitation-explorer .kpe-dates small{display:block;font-size:11px;opacity:.8}
-.kenya-precipitation-explorer .kpe-mapwrap{position:relative;width:100%;aspect-ratio:4/3;max-height:80vh}
-@media (min-width:800px){.kenya-precipitation-explorer .kpe-mapwrap{aspect-ratio:16/10}}
-.kenya-precipitation-explorer .kpe-map{position:absolute;inset:0}
-.kenya-precipitation-explorer .kpe-loading,.kenya-precipitation-explorer .kpe-message{position:absolute;z-index:5;left:50%;transform:translateX(-50%);
-  background:rgba(255,255,255,.95);border:1px solid var(--kpe-line);border-radius:4px;padding:6px 12px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
-.kenya-precipitation-explorer .kpe-loading{top:10px}
-.kenya-precipitation-explorer .kpe-message{top:50%;transform:translate(-50%,-50%);max-width:90%;text-align:center;color:#8a1c1c}
 .kenya-precipitation-explorer [hidden]{display:none!important}
-.kenya-precipitation-explorer .kpe-info{padding:10px}
-.kenya-precipitation-explorer .kpe-title{margin:0 0 6px;font-size:15px}
-.kenya-precipitation-explorer .kpe-legend{position:relative;padding-top:16px}
-.kenya-precipitation-explorer .kpe-bar{display:flex;height:16px;border:1px solid #888}
-.kenya-precipitation-explorer .kpe-bar i{flex:1}
-.kenya-precipitation-explorer .kpe-ticks{display:flex;font-size:10px;color:var(--kpe-muted)}
-.kenya-precipitation-explorer .kpe-ticks span{flex:1;text-align:center;overflow:visible;white-space:nowrap}
-.kenya-precipitation-explorer .kpe-ticks.top{position:absolute;top:0;left:0;right:0}
-.kenya-precipitation-explorer .kpe-meta{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:10px 0 0;font-size:13px}
-.kenya-precipitation-explorer .kpe-meta dt{color:var(--kpe-muted)}
-.kenya-precipitation-explorer .kpe-meta dd{margin:0}
-@media (max-width:560px){.kenya-precipitation-explorer .kpe-meta{grid-template-columns:1fr}.kenya-precipitation-explorer .kpe-meta dd{margin-bottom:4px}}
-.mapboxgl-popup-content .kpe-pop{font:13px/1.4 system-ui,sans-serif}
+.kenya-precipitation-explorer svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.kenya-precipitation-explorer button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.kenya-precipitation-explorer button:focus-visible,.kenya-precipitation-explorer select:focus-visible,.kenya-precipitation-explorer input:focus-visible{outline:2px solid #8ab8ff;outline-offset:2px}
+.kenya-precipitation-explorer .kpe-stage{position:relative;flex:1 1 auto;min-height:0}
+.kenya-precipitation-explorer .kpe-map,.kenya-precipitation-explorer .kpe-wind{position:absolute;inset:0;width:100%;height:100%}
+.kenya-precipitation-explorer .kpe-wind{pointer-events:none;z-index:2}
+/* search */
+.kenya-precipitation-explorer .kpe-search{position:absolute;z-index:8;top:12px;left:12px;width:min(360px,calc(100% - 24px));display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;background:var(--panel);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.kenya-precipitation-explorer .kpe-search input{flex:1;min-width:0;height:100%;background:none;border:0;color:var(--txt);font-size:14px}
+.kenya-precipitation-explorer .kpe-search input::placeholder{color:var(--mut)}
+.kenya-precipitation-explorer .kpe-clear{font-size:24px;line-height:1;width:32px;height:32px;color:var(--mut)}
+.kenya-precipitation-explorer .kpe-results{position:absolute;top:50px;left:0;right:0;margin:0;padding:4px;list-style:none;background:var(--panel);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.45);max-height:260px;overflow:auto}
+.kenya-precipitation-explorer .kpe-results li{padding:9px 10px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column}
+.kenya-precipitation-explorer .kpe-results li small{color:var(--mut)}
+.kenya-precipitation-explorer .kpe-results li:hover,.kenya-precipitation-explorer .kpe-results li.on{background:var(--panel2)}
+/* legend */
+.kenya-precipitation-explorer .kpe-legend{position:absolute;z-index:5;top:12px;left:384px;right:226px;max-width:540px;margin:0 auto;padding:8px 12px 6px;background:var(--panel);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.kenya-precipitation-explorer .kpe-lg-bar{display:flex;height:14px;border-radius:3px;overflow:hidden}
+.kenya-precipitation-explorer .kpe-lg-bar i{flex:1}
+.kenya-precipitation-explorer .kpe-lg-ticks{position:relative;height:16px;font-size:11px;color:var(--mut)}
+.kenya-precipitation-explorer .kpe-lg-ticks span{position:absolute;top:2px;transform:translateX(-50%)}
+.kenya-precipitation-explorer .kpe-lg-ticks .kpe-unit{right:0;left:auto;transform:none;color:var(--txt);font-weight:600;top:15px}
+.kenya-precipitation-explorer .kpe-lg-cap{font-size:11px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* right panel */
+.kenya-precipitation-explorer .kpe-side{position:absolute;z-index:6;top:12px;right:12px;width:200px;display:flex;flex-direction:column;gap:10px}
+.kenya-precipitation-explorer .kpe-layers{padding:6px;background:var(--panel);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.kenya-precipitation-explorer .kpe-layer{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:0 12px;border-radius:6px;font-size:14px;text-align:left;margin-bottom: 2px;}
+.kenya-precipitation-explorer .kpe-layer[aria-pressed="true"]{background:#e9eef5;color:#14202c}
+.kenya-precipitation-explorer .kpe-op{display:block;padding:6px 10px 4px}
+.kenya-precipitation-explorer .kpe-op input{width:100%;accent-color:var(--acc)}
+.kenya-precipitation-explorer .kpe-modelbox{padding:8px;background:var(--panel);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.kenya-precipitation-explorer .kpe-model{width:100%;height:36px;padding:0 10px;font-size:14px;color:#14202c;background:#e9eef5;border:0;border-radius:6px}
+.kenya-precipitation-explorer .kpe-run,.kenya-precipitation-explorer .kpe-updated{margin-top:6px;font-size:12px;color:var(--mut);text-align:right}
+.kenya-precipitation-explorer .kpe-updated.stale{color:#ffb454}
+/* zoom */
+.kenya-precipitation-explorer .kpe-zoom{position:absolute;z-index:6;right:12px;bottom:34px;display:flex;flex-direction:column;gap:8px}
+.kenya-precipitation-explorer .kpe-zoom button{width:40px;height:40px;border-radius:10px;background:#e9eef5;color:#14202c;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.kenya-precipitation-explorer .kpe-zoom button:active{background:#cfd9e6}
+.kenya-precipitation-explorer .kpe-zoom svg{width:20px;height:20px;stroke-width:2.6;margin:auto}
+/* status */
+.kenya-precipitation-explorer .kpe-loading,.kenya-precipitation-explorer .kpe-message{position:absolute;z-index:9;left:50%;transform:translateX(-50%);background:var(--panel);padding:8px 14px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.kenya-precipitation-explorer .kpe-loading{bottom:18px}
+.kenya-precipitation-explorer .kpe-message{top:50%;transform:translate(-50%,-50%);max-width:88%;text-align:center;color:#ffb4a8}
+/* timeline */
+.kenya-precipitation-explorer .kpe-timeline{display:flex;flex:none;background:var(--tl);color:var(--tlt)}
+.kenya-precipitation-explorer .kpe-ctl{display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:2px;width:158px;padding:6px 8px;border-right:1px solid var(--line)}
+.kenya-precipitation-explorer .kpe-ctl button{width:42px;height:42px;border-radius:50%;display:grid;place-items:center}
+.kenya-precipitation-explorer .kpe-ctl button:hover{background:rgba(0,0,0,.08)}
+.kenya-precipitation-explorer .kpe-ctl .kpe-play{width:48px;height:48px;background:var(--acc);color:#fff}
+.kenya-precipitation-explorer .kpe-ctl svg{fill:currentColor;stroke:none;width:22px;height:22px}
+.kenya-precipitation-explorer .kpe-tz{flex-basis:100%;text-align:center;font-size:10px;color:#5d6b7a}
+.kenya-precipitation-explorer .kpe-days{display:flex;flex:1;min-width:0;overflow-x:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.kenya-precipitation-explorer .kpe-day{flex:1 0 auto;min-width:128px;padding:0 16px;border-left:1px solid var(--line);font-size:16px;font-weight:200;text-align:left;white-space:nowrap}
+.kenya-precipitation-explorer .kpe-day sup{font-size:.62em;font-weight:200;vertical-align:baseline;position:relative;top:-.5em;text-transform:lowercase}
+.kenya-precipitation-explorer .kpe-day:hover{background:rgba(0,0,0,.06)}
+.kenya-precipitation-explorer .kpe-day[aria-selected="true"]{background:var(--acc);color:#fff}
+/* popup + pin */
+.kenya-precipitation-explorer .kpe-popup .mapboxgl-popup-content{background:#1e2d3e;color:#fff;padding:14px;border-radius:10px;min-width:230px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.kenya-precipitation-explorer .kpe-popup .mapboxgl-popup-close-button{color:#b9c8d8;font-size:22px;padding:2px 10px}
+.kenya-precipitation-explorer .kpe-popup.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip{border-top-color:#1e2d3e}
+.kenya-precipitation-explorer .kpe-popup.mapboxgl-popup-anchor-top .mapboxgl-popup-tip{border-bottom-color:#1e2d3e}
+.kenya-precipitation-explorer .kpe-popup.mapboxgl-popup-anchor-left .mapboxgl-popup-tip{border-right-color:#1e2d3e}
+.kenya-precipitation-explorer .kpe-popup.mapboxgl-popup-anchor-right .mapboxgl-popup-tip{border-left-color:#1e2d3e}
+.kenya-precipitation-explorer .kpe-pc{font-size:17px;margin-right:22px}
+.kenya-precipitation-explorer .kpe-pn{color:#b9c8d8;font-size:13px}
+.kenya-precipitation-explorer .kpe-pv{font-size:34px;font-weight:300;margin:10px 0 2px}
+.kenya-precipitation-explorer .kpe-pv small{font-size:17px}
+.kenya-precipitation-explorer .kpe-ps{font-size:12px;color:#9fb2c6;margin-bottom:10px}
+.kenya-precipitation-explorer .kpe-fc{width:100%;height:42px;border-radius:6px;background:#cfd9e6;color:#14202c;font-size:16px}
+.kenya-precipitation-explorer .kpe-fl{margin-top:8px;max-height:170px;overflow:auto;font-size:12px}
+.kenya-precipitation-explorer .kpe-fl div{display:grid;grid-template-columns:78px 1fr 52px;gap:8px;align-items:center;padding:3px 0}
+.kenya-precipitation-explorer .kpe-fl i{display:block;height:6px;border-radius:3px;background:#5aa9e6}
+.kenya-precipitation-explorer .kpe-fl b{text-align:right;font-weight:600}
+.kenya-precipitation-explorer .kpe-pin{width:30px;height:42px;color:#e9eef5;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5))}
+.kenya-precipitation-explorer .kpe-pin svg{width:30px;height:42px;fill:#2a4668;stroke:currentColor;stroke-width:2}
+.kenya-precipitation-explorer .mapboxgl-ctrl-scale{background:rgba(30,45,62,.8);color:#eef3f8;border-color:#eef3f8}
+.kenya-precipitation-explorer .mapboxgl-ctrl-attrib{background:rgba(30,45,62,.7)}
+.kenya-precipitation-explorer .mapboxgl-ctrl-attrib a{color:#cfd9e6}
+/* narrow containers: stack the overlays, controls become compact */
+@container (max-width: 859px){
+  .kenya-precipitation-explorer .kpe-search{width:calc(100% - 24px)}
+  .kenya-precipitation-explorer .kpe-legend{top:66px;left:12px;right:12px;max-width:none}
+  .kenya-precipitation-explorer .kpe-side{top:auto;bottom:44px;left:12px;right:auto;width:auto;flex-direction:row;align-items:flex-end}
+  .kenya-precipitation-explorer .kpe-layers{display:flex;gap:4px;flex-wrap:wrap;width:104px}
+  .kenya-precipitation-explorer .kpe-layer{width:44px;min-height:44px;padding:0;justify-content:center}
+  .kenya-precipitation-explorer .kpe-layer span{display:none}
+  .kenya-precipitation-explorer .kpe-op{width:100%;padding:2px 6px}
+  .kenya-precipitation-explorer .kpe-modelbox{width:138px}
+  .kenya-precipitation-explorer .kpe-run{display:none}
+  .kenya-precipitation-explorer .kpe-zoom button{width:30px;height:30px}
+  .kenya-precipitation-explorer .kpe-ctl{width:auto;flex-wrap:nowrap;padding:6px}
+  .kenya-precipitation-explorer .kpe-ctl button{width:38px;height:38px}
+  .kenya-precipitation-explorer .kpe-ctl .kpe-play{width:44px;height:44px}
+  .kenya-precipitation-explorer .kpe-tz{display:none}
+  .kenya-precipitation-explorer .kpe-day{min-width:112px;padding:0 12px;font-size:14px}
+}
+@container (max-width: 420px){
+  .kenya-precipitation-explorer .kpe-modelbox{width:118px}
+  .kenya-precipitation-explorer .kpe-lg-ticks span:nth-child(even){display:none}
+}
+@media (prefers-reduced-motion:reduce){.kenya-precipitation-explorer *{scroll-behavior:auto!important}}
+
+.mapboxgl-popup {
+  z-index: 20;
+}
+
+/* today highlight */
+.kenya-precipitation-explorer .kpe-day{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:4px}
+.kenya-precipitation-explorer .kpe-day.is-past{opacity:.5}
+.kenya-precipitation-explorer .kpe-day.is-past[aria-selected="true"]{opacity:1}
+.kenya-precipitation-explorer .kpe-day.is-today{box-shadow:inset 0 -4px 0 #ffb454}
+.kenya-precipitation-explorer .kpe-tag{font-size:10px;line-height:1;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:999px;background:#ffb454;color:#1b2733}
+.kenya-precipitation-explorer .kpe-day[aria-selected="true"] .kpe-tag{background:#fff;color:#2a5fb0}
+.kenya-precipitation-explorer .kpe-today{flex-basis:100%;width:auto!important;height:28px!important;margin-top:2px;border-radius:14px!important;font-size:12px;font-weight:700;background:rgba(0,0,0,.08);color:var(--tlt)}
+.kenya-precipitation-explorer .kpe-today[aria-pressed="true"]{background:#ffb454}
+@container (max-width: 859px){
+  .kenya-precipitation-explorer .kpe-today{flex-basis:auto;height:38px!important;padding:0 10px;margin:0 0 0 4px}
+}
