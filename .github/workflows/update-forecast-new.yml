@@ -1,8 +1,8 @@
-name: NEW-Update Kenya precipitation forecast
+name: Update Kenya precipitation forecast
 
 on:
   schedule:
-    - cron: '45 */6 * * *'
+    - cron: '3 21 * * *'   # 21:03 UTC = 00:03 EAT (UTC+3), once a day
   workflow_dispatch: {}
   push:
     branches: [main]
@@ -62,7 +62,9 @@ jobs:
         if: always()
         with:
           name: data-${{ matrix.model }}
-          path: ${{ env.PROJECT }}/data/${{ matrix.model }}.json
+          path: |
+            ${{ env.PROJECT }}/data/${{ matrix.model }}_*.json
+            ${{ env.PROJECT }}/data/_ptr_${{ matrix.model }}.json
           if-no-files-found: warn
 
   assemble:
@@ -89,8 +91,18 @@ jobs:
         run: |
           mkdir -p _site/data
           for f in index.html styles.css script.js forecast-adapter.js; do cp "$PROJECT/$f" _site/; done
-          ls -la _site/data
-          ls _site/data/*.json >/dev/null 2>&1 || { echo "::error::No model produced data; see the ingest jobs."; exit 1; }
+          ls _site/data/_ptr_*.json >/dev/null 2>&1 || { echo "::error::No model produced data; see the ingest jobs."; exit 1; }
+          cd _site/data
+          python3 - <<'PY'
+          import glob, json, datetime
+          models = {}
+          for f in sorted(glob.glob('_ptr_*.json')):
+              d = json.load(open(f)); models[d.pop('model')] = d
+          json.dump({'generated': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'models': models, 'errors': {}},
+                    open('latest.json', 'w'), separators=(',', ':'))
+          PY
+          rm -f _ptr_*.json
+          cat latest.json; echo; ls -la
 
       - uses: actions/upload-pages-artifact@v3
         with:
