@@ -1,4 +1,4 @@
-name: Update Kenya precipitation forecast
+name: NEW-Update Kenya precipitation forecast
 
 on:
   schedule:
