@@ -1,0 +1,107 @@
+name: Update Kenya precipitation forecast
+
+on:
+  schedule:
+    - cron: '45 */6 * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['**/kenya-rain/**', '.github/workflows/update-forecast.yml']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Each model runs as its own parallel job, so one slow or failing model cannot block the others.
+  ingest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [ecmwf_ifs, gfs, icon]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Locate project folder
+        run: |
+          F=$(find . -name ingest.py -not -path './.git/*' | head -n 1)
+          [ -n "$F" ] || { echo "::error::ingest.py not found in the repository"; exit 1; }
+          echo "PROJECT=$(dirname "$F")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libeccodes-dev
+          pip install numpy scipy eccodes ecmwf-opendata
+
+      - name: Ingest ${{ matrix.model }}
+        timeout-minutes: 15
+        env:
+          KPE_DATA: data
+          KPE_DAYS: '7'
+          KPE_BUDGET: '600'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          cd "$PROJECT"
+          python ingest.py ${{ matrix.model }}
+          ls -la data
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: data-${{ matrix.model }}
+          path: ${{ env.PROJECT }}/data/${{ matrix.model }}.json
+          if-no-files-found: warn
+
+  assemble:
+    needs: ingest
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Locate project folder
+        run: |
+          F=$(find . -name ingest.py -not -path './.git/*' | head -n 1)
+          [ -n "$F" ] || { echo "::error::ingest.py not found in the repository"; exit 1; }
+          echo "PROJECT=$(dirname "$F")" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: data-*
+          merge-multiple: true
+          path: _site/data
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/data
+          for f in index.html styles.css script.js forecast-adapter.js; do cp "$PROJECT/$f" _site/; done
+          ls -la _site/data
+          ls _site/data/*.json >/dev/null 2>&1 || { echo "::error::No model produced data; see the ingest jobs."; exit 1; }
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: assemble
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
