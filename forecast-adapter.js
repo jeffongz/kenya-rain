@@ -1,55 +1,69 @@
-/* Provider-independent adapter. Reads the static JSON written by ingest.py (no per-view API calls).
- * getForecastData({model, date, base, signal}) -> {model, modelLabel, resolution, run, date, validStart, validEnd,
- *   hours, partial, extent, lons, lats, values[lat][lon] (mm|null), units, source, updated, dates[], gridStepDeg}
- * A Meteologix/Kachelmann API provider can be added to `providers` later; none is implemented here. */
+/* Reads the static JSON written by ingest.py. Built to beat aggressive server/CDN caches:
+ *  - every request gets a unique ?cb= query string and cache:'no-store' (no custom headers, so no CORS preflight)
+ *  - data-data-base may list several mirrors (comma-separated); the file with the newest "updated" wins. */
 (function (global) {
   'use strict';
-  const MODELS = {
-    ecmwf_ifs: { label: 'ECMWF IFS' }, gfs: { label: 'GFS' }, icon: { label: 'ICON' },
-    ukmo: { label: 'UKMO' }, access_g: { label: 'ACCESS-G' }
-  };
+  const MODELS = { ecmwf_ifs: { label: 'ECMWF IFS' }, gfs: { label: 'GFS' }, icon: { label: 'ICON' } };
   const EXTENT = { west: 28, east: 52, south: -12, north: 15 };
   const cache = new Map(), TTL = 10 * 60 * 1000;
+  const bases = b => String(b || 'data').split(',').map(x => x.trim().replace(/\/+$/, '')).filter(Boolean);
+  const bust = u => u + (u.includes('?') ? '&' : '?') + 'cb=' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const aborted = s => { if (s && s.aborted) throw new DOMException('Aborted', 'AbortError'); };
 
-  async function getJSON(url, signal) {
-    const hit = cache.get(url);
-    if (hit && Date.now() - hit.t < TTL) return hit.v;
-    const res = await fetch(url, { signal, cache: 'no-cache' });
-    if (!res.ok) throw new Error('No data file at ' + url + ' (HTTP ' + res.status + '). Has ingest.py run for this model?');
-    const v = await res.json(); cache.set(url, { t: Date.now(), v }); return v;
+  async function fetchJSON(url, signal) {
+    const r = await fetch(bust(url), { signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
   }
-  async function getManifest(base = 'data', signal) {
-    // 1) use manifest.json when it is valid
-    try {
-      const m = await getJSON(base + '/manifest.json', signal);
-      if (m && m.models) return { errors: {}, ...m };
-    } catch (e) { if (e.name === 'AbortError') throw e; }
-    // 2) otherwise detect which model files exist (no manifest needed)
-    const models = {}, errors = {};
+  async function loadRaw(model, base, signal) {
+    const key = base + '|' + model, hit = cache.get(key);
+    if (hit && Date.now() - hit.t < TTL) return hit.v;
+    const res = await Promise.allSettled(bases(base).map(b => fetchJSON(b + '/' + model + '.json', signal)));
+    aborted(signal);
+    const ok = res.filter(x => x.status === 'fulfilled').map(x => x.value).filter(v => v && Array.isArray(v.days) && v.days.length);
+    if (!ok.length) throw new Error('No forecast file for ' + MODELS[model].label + ' (' + ((res[0].reason && res[0].reason.message) || 'unreachable') + ').');
+    const v = ok.sort((a, b) => String(b.updated).localeCompare(String(a.updated)))[0];  // freshest mirror wins
+    cache.set(key, { t: Date.now(), v }); return v;
+  }
+  async function availableModels(base, signal) {
+    const out = {};
     await Promise.all(Object.keys(MODELS).map(async id => {
-      try {
-        const r = await fetch(base + '/' + id + '.json', { method: 'HEAD', signal, cache: 'no-cache' });
-        if (r.ok) models[id] = {}; else errors[id] = 'No data file (' + id + '.json)';
-      } catch (e) { if (e.name === 'AbortError') throw e; errors[id] = 'No data file (' + id + '.json)'; }
+      const rs = await Promise.allSettled(bases(base).map(b => fetch(bust(b + '/' + id + '.json'), { method: 'HEAD', cache: 'no-store', signal })));
+      out[id] = rs.some(r => r.status === 'fulfilled' && (r.value.ok || r.value.status === 405));
     }));
-    if (!Object.keys(models).length) throw new Error('No forecast files found in "' + base + '/". Add at least one model file, e.g. gfs.json.');
-    return { models, errors, detected: true };
+    aborted(signal); return out;
   }
   const axis = (a, b, s) => { const o = []; for (let v = a; v <= b + 1e-9; v += s) o.push(+v.toFixed(4)); return o; };
 
-  async function getForecastData({ model, date = null, base = 'data', parameter = 'precipitation_accumulation', signal }) {
-    if (parameter !== 'precipitation_accumulation') throw new Error('Unsupported parameter: ' + parameter);
+  async function getForecastData({ model, date = null, base = 'data', signal }) {
     if (!MODELS[model]) throw new Error('Unknown model: ' + model);
-    const r = await getJSON(base + '/' + model + '.json', signal);
-    if (!r.days || !r.days.length) throw new Error('Model file contains no forecast days.');
+    const r = await loadRaw(model, base, signal);
     const day = r.days.find(x => x.date === date) || r.days[0];
     const e = r.extent, lons = axis(e.west, e.east, r.step), lats = axis(e.south, e.north, r.step), nx = lons.length, values = [];
     for (let y = 0; y < lats.length; y++) values.push(day.values.slice(y * nx, (y + 1) * nx));
     return {
       model, modelLabel: MODELS[model].label, resolution: r.resolution, run: r.run, date: day.date, validStart: day.start, validEnd: day.end,
       hours: day.hours, partial: !!day.partial, extent: e, lons, lats, values, units: r.units, source: r.source, updated: r.updated,
-      dates: r.days.map(x => x.date), gridStepDeg: r.step
+      dates: r.days.map(x => x.date), gridStepDeg: r.step,
+      wind: day.wind ? { time: day.wind.time, step: day.wind.step, stepDeg: day.wind.step_deg, u: day.wind.u, v: day.wind.v,
+        nx: Math.round((e.east - e.west) / day.wind.step_deg) + 1, ny: Math.round((e.north - e.south) / day.wind.step_deg) + 1 } : null
     };
   }
-  global.ForecastAdapter = { getForecastData, getManifest, MODELS, EXTENT };
+
+  // Daily totals at a point for every day of an already-loaded model (null if not loaded).
+  function pointSeries({ model, lon, lat, base = 'data' }) {
+    const hit = cache.get(base + '|' + model); if (!hit) return null;
+    const r = hit.v, e = r.extent, s = r.step, nx = Math.round((e.east - e.west) / s) + 1, ny = Math.round((e.north - e.south) / s) + 1;
+    const fx = (lon - e.west) / s, fy = (lat - e.south) / s, inside = fx >= 0 && fy >= 0 && fx <= nx - 1 && fy <= ny - 1;
+    return r.days.map(d => {
+      let v = null;
+      if (inside) {
+        const x0 = Math.min(Math.floor(fx), nx - 2), y0 = Math.min(Math.floor(fy), ny - 2), tx = fx - x0, ty = fy - y0, i = y0 * nx + x0;
+        const q = [d.values[i], d.values[i + 1], d.values[i + nx], d.values[i + nx + 1]];
+        if (q.every(x => x != null)) v = (q[0] * (1 - tx) + q[1] * tx) * (1 - ty) + (q[2] * (1 - tx) + q[3] * tx) * ty;
+      }
+      return { date: d.date, hours: d.hours, partial: !!d.partial, value: v };
+    });
+  }
+  global.ForecastAdapter = { getForecastData, availableModels, pointSeries, clearCache: () => cache.clear(), MODELS, EXTENT };
 })(window);
