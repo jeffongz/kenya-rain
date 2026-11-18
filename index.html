@@ -1,30 +1,62 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kenya precipitation forecast explorer</title>
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
 <link href="styles.css" rel="stylesheet">
+<style>html,body{margin:0;background:#0f1620}</style>
 </head><body>
-<!-- Set data-mapbox-token to your public Mapbox token (pk.…). -->
+<!-- data-mapbox-token: your public Mapbox token (pk.…).
+     data-data-base: folder with the model JSON files. Several mirrors may be listed, comma-separated: the freshest file wins. -->
 <div class="kenya-precipitation-explorer" data-mapbox-token="pk.eyJ1Ijoic2thcm5sIiwiYSI6ImNrMzRtb29rcjEzbGUzY28yd2JiZTNkNWgifQ.BcdR077m5z3SR18u-dWClw" data-data-base="data">
-  <div class="kpe-controls">
-    <div class="kpe-models" role="group" aria-label="Model"></div>
-    <label class="kpe-opacity">Opacity <input type="range" min="20" max="100" value="85"></label>
-  </div>
-  <div class="kpe-dates" role="tablist" aria-label="Forecast date"></div>
-  <div class="kpe-mapwrap">
+  <div class="kpe-stage">
     <div class="kpe-map"></div>
+
+    <div class="kpe-search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <input type="search" placeholder="Search place or lat, lon" autocomplete="off" aria-label="Search location">
+      <button type="button" class="kpe-clear" aria-label="Clear search" hidden>×</button>
+      <ul class="kpe-results" role="listbox" hidden></ul>
+    </div>
+
+    <div class="kpe-legend" aria-label="Precipitation legend">
+      <div class="kpe-lg-bar"></div><div class="kpe-lg-ticks"></div><div class="kpe-lg-cap"></div>
+    </div>
+
+    <div class="kpe-side">
+      <div class="kpe-layers">
+        <button type="button" class="kpe-layer" data-layer="wind" aria-pressed="true" title="Wind (10 m)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h9.5a2.5 2.5 0 1 0-2.5-2.5M3 12h14a3 3 0 1 1-3 3M3 16h6"/></svg><span>Wind</span></button>
+        <button type="button" class="kpe-layer" data-layer="precip" aria-pressed="true" title="Precipitation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4c2.2 3 3.5 4.8 3.5 6.5a3.5 3.5 0 1 1-7 0C4.5 8.8 5.8 7 8 4z"/><path d="M17 11c1.7 2.3 2.7 3.7 2.7 5a2.7 2.7 0 1 1-5.4 0c0-1.3 1-2.7 2.7-5z"/></svg><span>Precipitation</span></button>
+        <label class="kpe-op" title="Precipitation opacity"><input type="range" min="20" max="100" value="85" aria-label="Precipitation opacity"></label>
+      </div>
+      <div class="kpe-modelbox">
+        <select class="kpe-model" aria-label="Forecast model"></select>
+        <div class="kpe-run"></div><div class="kpe-updated"></div>
+      </div>
+    </div>
+
+    <div class="kpe-zoom">
+      <button type="button" class="kpe-zin" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button type="button" class="kpe-zout" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    </div>
+
     <div class="kpe-loading" hidden>Loading forecast…</div>
     <div class="kpe-message" hidden></div>
   </div>
-  <div class="kpe-info">
-    <h3 class="kpe-title">Precipitation, 24h (mm)</h3>
-    <div class="kpe-legend"></div>
-    <dl class="kpe-meta"></dl>
+
+  <div class="kpe-timeline">
+    <div class="kpe-ctl">
+      <button type="button" class="kpe-prev" aria-label="Previous day"></button>
+      <button type="button" class="kpe-play" aria-label="Play slideshow"></button>
+      <button type="button" class="kpe-next" aria-label="Next day"></button>
+      <button type="button" class="kpe-today" aria-pressed="false" title="Jump to today (East Africa Time, UTC+3)">Today</button>
+    </div>
+    <div class="kpe-days" role="tablist" aria-label="Forecast day"></div>
   </div>
 </div>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 <script src="forecast-adapter.js"></script>
 <script src="script.js"></script>
 </body></html>
-
