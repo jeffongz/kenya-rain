@@ -42,9 +42,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libeccodes-dev
-          pip install numpy scipy eccodes ecmwf-opendata
+          # pip only: eccodeslib ships the GRIB library inside the wheel, so Ubuntu's apt mirrors (which can return 503) are not needed
+          for i in 1 2 3; do
+            pip install --retries 5 numpy scipy eccodes eccodeslib ecmwf-opendata && break
+            echo "pip install failed (attempt $i), retrying in 20 s"; sleep 20
+          done
+          python -c "import eccodes, numpy, scipy; from ecmwf.opendata import Client; print('eccodes', eccodes.__version__)"
 
       - name: Ingest ${{ matrix.model }}
         timeout-minutes: 15
