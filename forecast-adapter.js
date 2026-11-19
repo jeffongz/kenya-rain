@@ -1,10 +1,11 @@
 /* Reads the static JSON written by ingest.py. Built to beat aggressive server/CDN caches:
- *  - every request gets a unique ?cb= query string and cache:'no-store' (no custom headers, so no CORS preflight)
+ *  - forecasts are saved under unique names (<model>_<run>_<hash>.json) that latest.json points to; only latest.json needs cache-busting
+ *  - requests for it get a unique ?cb= query string and cache:'no-store' (no custom headers, so no CORS preflight)
  *  - data-data-base may list several mirrors (comma-separated); the file with the newest "updated" wins. */
 (function (global) {
   'use strict';
   const MODELS = { ecmwf_ifs: { label: 'ECMWF IFS' }, gfs: { label: 'GFS' }, icon: { label: 'ICON' } };
-  const EXTENT = { west: 28, east: 52, south: -12, north: 15 };
+  const EXTENT = { west: -26, east: 60, south: -36, north: 38 };  // must match ingest.py
   const cache = new Map(), TTL = 10 * 60 * 1000;
   const bases = b => String(b || 'data').split(',').map(x => x.trim().replace(/\/+$/, '')).filter(Boolean);
   const bust = u => u + (u.includes('?') ? '&' : '?') + 'cb=' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -15,19 +16,28 @@
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }
+  // latest.json (the only fixed-name file) is fetched with a cache-buster; the unique file names it lists never change, so they cache safely.
+  async function pointers(base, signal) {
+    const rs = await Promise.allSettled(bases(base).map(async b => ({ b, p: await fetchJSON(b + '/latest.json', signal) })));
+    aborted(signal);
+    return rs.filter(r => r.status === 'fulfilled' && r.value.p && r.value.p.models).map(r => r.value);
+  }
   async function loadRaw(model, base, signal) {
     const key = base + '|' + model, hit = cache.get(key);
     if (hit && Date.now() - hit.t < TTL) return hit.v;
-    const res = await Promise.allSettled(bases(base).map(b => fetchJSON(b + '/' + model + '.json', signal)));
-    aborted(signal);
+    const ptrs = await pointers(base, signal), jobs = [];
+    ptrs.forEach(({ b, p }) => { const m = p.models[model]; if (m && m.file) jobs.push(fetch(b + '/' + m.file, { signal }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })); });
+    if (!jobs.length) bases(base).forEach(b => jobs.push(fetchJSON(b + '/' + model + '.json', signal)));  // legacy fixed names (hand-uploaded files)
+    const res = await Promise.allSettled(jobs); aborted(signal);
     const ok = res.filter(x => x.status === 'fulfilled').map(x => x.value).filter(v => v && Array.isArray(v.days) && v.days.length);
-    if (!ok.length) throw new Error('No forecast file for ' + MODELS[model].label + ' (' + ((res[0].reason && res[0].reason.message) || 'unreachable') + ').');
+    if (!ok.length) throw new Error('No forecast file for ' + MODELS[model].label + ' (' + ((res[0] && res[0].reason && res[0].reason.message) || 'not listed in latest.json') + ').');
     const v = ok.sort((a, b) => String(b.updated).localeCompare(String(a.updated)))[0];  // freshest mirror wins
     cache.set(key, { t: Date.now(), v }); return v;
   }
   async function availableModels(base, signal) {
-    const out = {};
-    await Promise.all(Object.keys(MODELS).map(async id => {
+    const ptrs = await pointers(base, signal), out = {};
+    if (ptrs.length) { Object.keys(MODELS).forEach(id => { out[id] = ptrs.some(x => x.p.models[id] && x.p.models[id].file); }); return out; }
+    await Promise.all(Object.keys(MODELS).map(async id => {  // no latest.json: probe legacy names
       const rs = await Promise.allSettled(bases(base).map(b => fetch(bust(b + '/' + id + '.json'), { method: 'HEAD', cache: 'no-store', signal })));
       out[id] = rs.some(r => r.status === 'fulfilled' && (r.value.ok || r.value.status === 405));
     }));
