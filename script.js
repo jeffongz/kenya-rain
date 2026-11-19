@@ -93,6 +93,8 @@
       q('.kpe-today').addEventListener('click', () => this.goToday());
       q('.kpe-zin').addEventListener('click', () => this.map && this.map.zoomIn({ duration: 250 }));
       q('.kpe-zout').addEventListener('click', () => this.map && this.map.zoomOut({ duration: 250 }));
+      q('.kpe-kenya').addEventListener('click', () => this.fit([[33.8, -4.9], [42.0, 5.6]]));
+      q('.kpe-africa').addEventListener('click', () => this.fit([[-26, -36], [60, 38]]));
       this.root.querySelectorAll('.kpe-layer').forEach(b => b.addEventListener('click', () => {
         const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', on);
         if (b.dataset.layer === 'wind') { this.windOn = on; on ? this.runWind() : this.stopWind(); }
@@ -107,6 +109,8 @@
     }
     syncPlay() { const b = this.q('.kpe-play'); b.innerHTML = this.playing ? I.pause : I.play; b.setAttribute('aria-label', this.playing ? 'Pause slideshow' : 'Play slideshow'); }
     idx() { return this.data ? Math.max(0, this.data.dates.indexOf(this.date)) : 0; }
+    pad() { return this.root.clientWidth >= 860 ? { top: 90, bottom: 40, left: 30, right: 240 } : { top: 150, bottom: 110, left: 20, right: 20 }; }   // keep clear of the overlays
+    fit(bounds) { if (this.map) this.map.fitBounds(bounds, { padding: this.pad(), duration: 900 }); }
     pickDate(dates) { const t = todayEAT(); return dates.includes(t) ? t : (dates.find(x => x > t) || dates[dates.length - 1]); }  // today, else next available, else latest
     goToday() { if (!this.data) return; this.pause(); this.date = this.pickDate(this.data.dates); this.load(); }
     markToday() {   // highlight today's tab (and dim past days), independent of which day is selected
