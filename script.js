@@ -38,15 +38,21 @@
     if ([a, b, c, e].some(v => v == null)) return null;
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + e * tx) * ty;
   }
+  // value (0.1 mm bins) -> colour lookup; every threshold is a multiple of 0.1 so this equals colourFor() exactly
+  const LUT = (() => { const a = new Array(3001); for (let i = 0; i <= 3000; i++) a[i] = colourFor((i + 0.05) / 10); return a; })();
   function render(d, canvas) {   // Mercator-registered raster so it stays aligned with the map
-    const E = d.extent, W = canvas.width = 960, y0 = merc(E.south), y1 = merc(E.north);
+    const E = d.extent, W = canvas.width = 1800, y0 = merc(E.south), y1 = merc(E.north), st = d.gridStepDeg, vals = d.values, nx = d.lons.length, ny = d.lats.length;
     const H = canvas.height = Math.round(W * (y1 - y0) / (((E.east - E.west) * Math.PI) / 180));
-    const ctx = canvas.getContext('2d'), img = ctx.createImageData(W, H);
-    for (let py = 0; py < H; py++) {
-      const lat = unmerc(y1 - (py + 0.5) / H * (y1 - y0));
-      for (let px = 0; px < W; px++) {
-        const col = colourFor(sample(d, E.west + (px + 0.5) / W * (E.east - E.west), lat)); if (!col) continue;
-        const k = (py * W + px) * 4; img.data[k] = col[0]; img.data[k + 1] = col[1]; img.data[k + 2] = col[2]; img.data[k + 3] = 255;
+    const ctx = canvas.getContext('2d'), img = ctx.createImageData(W, H), px = img.data, X0 = new Int32Array(W), TX = new Float32Array(W);
+    for (let x = 0; x < W; x++) { const fx = (x + 0.5) / W * (E.east - E.west) / st; let c = Math.floor(fx); if (c > nx - 2) c = nx - 2; X0[x] = c; TX[x] = fx - c; }
+    for (let y = 0; y < H; y++) {
+      const fy = (unmerc(y1 - (y + 0.5) / H * (y1 - y0)) - E.south) / st; if (fy < 0 || fy > ny - 1) continue;
+      let r = Math.floor(fy); if (r > ny - 2) r = ny - 2; const ty = fy - r, ra = vals[r], rb = vals[r + 1];
+      for (let x = 0; x < W; x++) {
+        const c = X0[x], tx = TX[x], a = ra[c], b = ra[c + 1], e = rb[c], f = rb[c + 1];
+        if (a == null || b == null || e == null || f == null) continue;
+        const col = LUT[Math.min(3000, Math.floor(((a * (1 - tx) + b * tx) * (1 - ty) + (e * (1 - tx) + f * tx) * ty) * 10 + 1e-9))]; if (!col) continue;
+        const k = (y * W + x) * 4; px[k] = col[0]; px[k + 1] = col[1]; px[k + 2] = col[2]; px[k + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -128,7 +134,7 @@
         if (m && Math.abs(+m[1]) <= 90 && Math.abs(+m[2]) <= 180) return show([{ name: (+m[1]).toFixed(3) + ', ' + (+m[2]).toFixed(3), sub: 'Coordinates', lat: +m[1], lon: +m[2] }]);
         if (ac) ac.abort(); ac = new AbortController();
         try {
-          const u = 'https://api.mapbox.com/search/geocode/v6/forward?q=' + encodeURIComponent(v) + '&bbox=28,-12,52,15&limit=6&language=en&access_token=' + mapboxgl.accessToken;
+          const u = 'https://api.mapbox.com/search/geocode/v6/forward?q=' + encodeURIComponent(v) + '&bbox=-26,-36,60,38&limit=6&language=en&access_token=' + mapboxgl.accessToken;
           const j = await (await fetch(u, { signal: ac.signal })).json();
           show((j.features || []).map(f => ({ name: f.properties.name, sub: f.properties.place_formatted || '', lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] })));
         } catch (e) { if (e.name !== 'AbortError') show([]); }
@@ -148,7 +154,7 @@
       const token = this.root.dataset.mapboxToken;
       if (!token || token.startsWith('YOUR_')) return this.msg('Add a Mapbox public token in data-mapbox-token.');
       mapboxgl.accessToken = token;
-      this.map = new mapboxgl.Map({ container: this.q('.kpe-map'), style: 'mapbox://styles/mapbox/light-v11', center: [37.5, 0.5], zoom: 5.85, attributionControl: false, dragRotate: false, pitchWithRotate: false, projection: 'mercator' });
+      this.map = new mapboxgl.Map({ container: this.q('.kpe-map'), style: 'mapbox://styles/mapbox/light-v11', bounds: [[-26, -36], [60, 38]], fitBoundsOptions: { padding: { top: 110, bottom: 30, left: 30, right: 30 } }, minZoom: 1.6, attributionControl: false, dragRotate: false, pitchWithRotate: false, projection: 'mercator' });
       this.map.scrollZoom.disable(); this.map.touchZoomRotate.disableRotation(); this.map.touchPitch && this.map.touchPitch.disable();
       this.map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right');
       this.map.addControl(new mapboxgl.ScaleControl({ maxWidth: 110 }), 'bottom-left');
@@ -168,9 +174,7 @@
       map.getStyle().layers.forEach(l => {
         if (l.type !== 'symbol' || !l.layout || l.layout['text-field'] == null) return;
         const set = (k, v) => map.setPaintProperty(l.id, k, v);
-        set('text-color', '#ffffff'); set('text-halo-color', '#000000'); set('text-halo-width', 1); set('text-halo-blur', 0); set('text-opacity', 1);
-        map.setLayoutProperty(l.id, 'text-letter-spacing', 0.05);
-        map.setLayoutProperty(l.id, 'text-font', ['Open Sans Regular', 'Arial Unicode MS Regular']);
+        set('text-color', '#ffffff'); set('text-halo-color', '#000000'); set('text-halo-width', 1.5); set('text-halo-blur', 0); set('text-opacity', 1);
       });
     }
 
@@ -226,7 +230,7 @@
     }
     frame(d) {  // rendered raster per model/day/data-version, so slideshow frames are instant
       const key = d.model + '|' + d.date + '|' + d.updated; let url = this.frames.get(key);
-      if (!url) { render(d, this.canvas); url = this.canvas.toDataURL('image/png'); this.frames.set(key, url); if (this.frames.size > 40) this.frames.delete(this.frames.keys().next().value); }
+      if (!url) { render(d, this.canvas); url = this.canvas.toDataURL('image/png'); this.frames.set(key, url); if (this.frames.size > 14) this.frames.delete(this.frames.keys().next().value); }
       return url;
     }
     async prefetch() {
@@ -234,7 +238,7 @@
       try { this.frame(await ForecastAdapter.getForecastData({ model: this.model, date: next, base: this.base })); } catch (e) { /* optional */ }
     }
     show(d) {
-      this.map.getSource('kpe-wx').updateImage({ url: this.frame(d) });
+      const e = d.extent; this.map.getSource('kpe-wx').updateImage({ url: this.frame(d), coordinates: [[e.west, e.north], [e.east, e.north], [e.east, e.south], [e.west, e.south]] });
       const days = this.q('.kpe-days');
       if (days.dataset.key !== d.model + d.dates.join()) {
         days.textContent = ''; days.dataset.key = d.model + d.dates.join();
@@ -246,7 +250,7 @@
       if (active) days.scrollTo({ left: active.offsetLeft - days.clientWidth / 2 + active.offsetWidth / 2, behavior: 'smooth' });
       this.q('.kpe-lg-cap').textContent = (d.date === todayEAT() ? 'Today · ' : '') + 'Precipitation ' + d.hours + ' h' + (d.partial ? ' (partial day)' : '') + ' · ' + eat(d.validStart) + ' → ' + eat(d.validEnd);
       this.q('.kpe-model').value = d.model; this.q('.kpe-run').textContent = 'Run ' + eat(d.run);
-      const up = this.q('.kpe-updated'); up.textContent = 'Updated ' + ago(d.updated); up.classList.toggle('stale', Date.now() - new Date(d.updated) > 14 * 3600e3);
+      const up = this.q('.kpe-updated'); up.textContent = 'updated ' + ago(d.updated); up.classList.toggle('stale', Date.now() - new Date(d.updated) > 14 * 3600e3);
       up.title = d.source + ' · ' + d.resolution + ' · wind ' + (d.wind ? eat(d.wind.time) : 'n/a');
       this.setWind(d.wind);
       if (this.popup && this.popup.isOpen()) this.showPoint(this.pt.ll, this.pt.label);
@@ -289,10 +293,10 @@
     setWind(w) { this.wind = w; const b = this.q('[data-layer="wind"]'); b.disabled = !w; b.style.opacity = w ? '' : '.45'; this.clearWind(); w && this.windOn ? this.runWind() : this.stopWind(); }
     runWind() {
       if (this.raf || !this.wind || !this.wc || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
-      const ex = ForecastAdapter.EXTENT, ctx = this.wctx, K = 0.18;
+      const ctx = this.wctx, K = 0.18;
       this.parts = Array.from({ length: Math.round(Math.min(4000, this.ww * this.wh / 350)) }, () => this.seed({}));
       const frame = () => {
-        this.raf = requestAnimationFrame(frame); if (!this.wind) return;
+        this.raf = requestAnimationFrame(frame); if (!this.wind) return; const ex = (this.data && this.data.extent) || ForecastAdapter.EXTENT;
         ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fillRect(0, 0, this.ww, this.wh);
         ctx.globalCompositeOperation = 'source-over'; ctx.lineWidth = 1.1;
         for (const p of this.parts) {
