@@ -8,7 +8,7 @@
 </head><body>
 <!-- data-mapbox-token: your public Mapbox token (pk.…).
      data-data-base: folder with the model JSON files. Several mirrors may be listed, comma-separated: the freshest file wins. -->
-<div class="kenya-precipitation-explorer" data-mapbox-token="pk.eyJ1Ijoic2thcm5sIiwiYSI6ImNrMzRtb29rcjEzbGUzY28yd2JiZTNkNWgifQ.BcdR077m5z3SR18u-dWClw" data-data-base="data">
+<div class="kenya-precipitation-explorer" data-mapbox-token="YOUR_MAPBOX_PUBLIC_TOKEN" data-data-base="data">
   <div class="kpe-stage">
     <div class="kpe-map"></div>
 
@@ -20,13 +20,16 @@
     </div>
 
     <div class="kpe-legend" aria-label="Precipitation legend">
-      <div class="kpe-lg-bar"></div><div class="kpe-lg-ticks"></div><div class="kpe-lg-cap"></div>
+      <div class="kpe-lgp"><div class="kpe-lg-bar"></div><div class="kpe-lg-ticks"></div><div class="kpe-lg-cap"></div></div>
+      <div class="kpe-lgt" hidden><div class="kpe-lg-bar kpe-tbar"></div><div class="kpe-lg-ticks kpe-tticks"></div><div class="kpe-lg-cap kpe-tcap"></div></div>
     </div>
 
     <div class="kpe-side">
       <div class="kpe-layers">
         <button type="button" class="kpe-layer" data-layer="wind" aria-pressed="true" title="Wind (10 m)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h9.5a2.5 2.5 0 1 0-2.5-2.5M3 12h14a3 3 0 1 1-3 3M3 16h6"/></svg><span>Wind</span></button>
+        <button type="button" class="kpe-layer" data-layer="temp" aria-pressed="false" title="Temperature (2 m)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14.5V5a2 2 0 1 1 4 0v9.5a4 4 0 1 1-4 0z"/></svg><span>Temperature</span></button>
         <button type="button" class="kpe-layer" data-layer="precip" aria-pressed="true" title="Precipitation">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4c2.2 3 3.5 4.8 3.5 6.5a3.5 3.5 0 1 1-7 0C4.5 8.8 5.8 7 8 4z"/><path d="M17 11c1.7 2.3 2.7 3.7 2.7 5a2.7 2.7 0 1 1-5.4 0c0-1.3 1-2.7 2.7-5z"/></svg><span>Precipitation</span></button>
         <label class="kpe-op" title="Precipitation opacity"><input type="range" min="20" max="100" value="85" aria-label="Precipitation opacity"></label>
