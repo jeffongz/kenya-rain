@@ -30,18 +30,28 @@
   const merc = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
   const unmerc = y => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180 / Math.PI;
 
-  function sample(d, lon, lat) {
-    const { lons, lats, values } = d, s = d.gridStepDeg, fx = (lon - lons[0]) / s, fy = (lat - lats[0]) / s;
-    if (fx < 0 || fy < 0 || fx > lons.length - 1 || fy > lats.length - 1) return null;
-    const x0 = Math.min(Math.floor(fx), lons.length - 2), y0 = Math.min(Math.floor(fy), lats.length - 2), tx = fx - x0, ty = fy - y0;
+  function sampleGrid(values, nx, ny, st, ex, lon, lat) {   // bilinear; null outside the grid or next to missing cells
+    const fx = (lon - ex.west) / st, fy = (lat - ex.south) / st;
+    if (fx < 0 || fy < 0 || fx > nx - 1 || fy > ny - 1) return null;
+    const x0 = Math.min(Math.floor(fx), nx - 2), y0 = Math.min(Math.floor(fy), ny - 2), tx = fx - x0, ty = fy - y0;
     const a = values[y0][x0], b = values[y0][x0 + 1], c = values[y0 + 1][x0], e = values[y0 + 1][x0 + 1];
     if ([a, b, c, e].some(v => v == null)) return null;
     return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + e * tx) * ty;
   }
-  // value (0.1 mm bins) -> colour lookup; every threshold is a multiple of 0.1 so this equals colourFor() exactly
+  const sample = (d, lon, lat) => sampleGrid(d.values, d.lons.length, d.lats.length, d.gridStepDeg, d.extent, lon, lat);
+
+  // rainfall: value (0.1 mm bins) -> colour; every threshold is a multiple of 0.1 so this equals colourFor() exactly
   const LUT = (() => { const a = new Array(3001); for (let i = 0; i <= 3000; i++) a[i] = colourFor((i + 0.05) / 10); return a; })();
-  function render(d, canvas) {   // Mercator-registered raster so it stays aligned with the map
-    const E = d.extent, W = canvas.width = 1800, y0 = merc(E.south), y1 = merc(E.north), st = d.gridStepDeg, vals = d.values, nx = d.lons.length, ny = d.lats.length;
+  // temperature: smooth ramp, -30 .. 55 deg C in 0.1 deg bins
+  const TSTOPS = [[-30, '#6a1b9a'], [-20, '#8e44ad'], [-10, '#3f51b5'], [0, '#2196f3'], [8, '#29b6f6'], [14, '#26a69a'], [18, '#66bb6a'], [22, '#d4e157'], [26, '#ffee58'],
+    [30, '#ffb300'], [34, '#fb8c00'], [38, '#e64a19'], [42, '#c62828'], [46, '#8e0b3a'], [55, '#4a0a2a']];
+  const hex3 = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16));
+  const tcol = t => { let i = 1; while (i < TSTOPS.length - 1 && t > TSTOPS[i][0]) i++; const [t0, c0] = TSTOPS[i - 1], [t1, c1] = TSTOPS[i], f = Math.max(0, Math.min(1, (t - t0) / (t1 - t0))), a = hex3(c0), b = hex3(c1); return a.map((x, k) => Math.round(x + (b[k] - x) * f)); };
+  const TLUT = Array.from({ length: 851 }, (_, i) => tcol(-30 + i / 10));
+  const RAIN = { lut: LUT, off: 0 }, TEMP = { lut: TLUT, off: 30 };
+
+  function renderGrid(g, canvas, L) {   // Mercator-registered raster so it stays aligned with the map
+    const E = g.extent, W = canvas.width = 1800, y0 = merc(E.south), y1 = merc(E.north), st = g.st, vals = g.values, nx = g.nx, ny = g.ny, lut = L.lut, top = lut.length - 1, off = L.off;
     const H = canvas.height = Math.round(W * (y1 - y0) / (((E.east - E.west) * Math.PI) / 180));
     const ctx = canvas.getContext('2d'), img = ctx.createImageData(W, H), px = img.data, X0 = new Int32Array(W), TX = new Float32Array(W);
     for (let x = 0; x < W; x++) { const fx = (x + 0.5) / W * (E.east - E.west) / st; let c = Math.floor(fx); if (c > nx - 2) c = nx - 2; X0[x] = c; TX[x] = fx - c; }
@@ -51,12 +61,15 @@
       for (let x = 0; x < W; x++) {
         const c = X0[x], tx = TX[x], a = ra[c], b = ra[c + 1], e = rb[c], f = rb[c + 1];
         if (a == null || b == null || e == null || f == null) continue;
-        const col = LUT[Math.min(3000, Math.floor(((a * (1 - tx) + b * tx) * (1 - ty) + (e * (1 - tx) + f * tx) * ty) * 10 + 1e-9))]; if (!col) continue;
+        let i = Math.floor(((a * (1 - tx) + b * tx) * (1 - ty) + (e * (1 - tx) + f * tx) * ty + off) * 10 + 1e-9); i = i < 0 ? 0 : i > top ? top : i;
+        const col = lut[i]; if (!col) continue;
         const k = (y * W + x) * 4; px[k] = col[0]; px[k + 1] = col[1]; px[k + 2] = col[2]; px[k + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
   }
+  const rainGrid = d => ({ extent: d.extent, values: d.values, nx: d.lons.length, ny: d.lats.length, st: d.gridStepDeg });
+  const tempGrid = d => ({ extent: d.extent, values: d.temp.values, nx: d.temp.nx, ny: d.temp.ny, st: d.temp.stepDeg });
   function windAt(w, ex, lon, lat) {
     const fx = (lon - ex.west) / w.stepDeg, fy = (lat - ex.south) / w.stepDeg;
     if (fx < 0 || fy < 0 || fx > w.nx - 1 || fy > w.ny - 1) return null;
@@ -71,7 +84,7 @@
     constructor(root) {
       this.root = root; this.q = s => root.querySelector(s); this.base = root.dataset.dataBase || 'data';
       this.model = 'ecmwf_ifs'; this.date = null; this.data = null; this.ctrl = null; this.frames = new Map(); this.canvas = document.createElement('canvas');
-      this.playing = false; this.precipOn = true; this.windOn = true; this.wind = null; this.raf = null; this.loadedAt = 0;
+      this.playing = false; this.precipOn = true; this.windOn = true; this.tempOn = false; this.theme = 'light'; this.wind = null; this.raf = null; this.loadedAt = 0;
       this.buildLegend(); this.bindUI();
       const io = 'IntersectionObserver' in window ? new IntersectionObserver(es => { if (es[0].isIntersecting) { io.disconnect(); this.init(); } }) : null;
       io ? io.observe(root) : this.init();
@@ -79,10 +92,15 @@
 
     /* ---------------- UI ---------------- */
     buildLegend() {
-      const bar = this.q('.kpe-lg-bar'), tk = this.q('.kpe-lg-ticks');
+      const bar = this.q('.kpe-lgp .kpe-lg-bar'), tk = this.q('.kpe-lgp .kpe-lg-ticks');
       C.forEach(c => { const i = el('i'); i.style.background = 'rgb(' + c.join(',') + ')'; bar.appendChild(i); });
       [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 24].forEach(i => { const s = el('span', null, T[i]); s.style.left = ((i + 0.5) / T.length * 100) + '%'; tk.appendChild(s); });
       tk.appendChild(el('span', 'kpe-unit', 'mm'));
+      const tb = this.q('.kpe-tbar'), tt = this.q('.kpe-tticks'), stops = [];   // temperature legend: -10 .. 50 deg C from the same colour table
+      for (let t = -10; t <= 50; t += 2) stops.push('rgb(' + TLUT[(t + 30) * 10].join(',') + ') ' + ((t + 10) / 60 * 100) + '%');
+      tb.style.background = 'linear-gradient(90deg,' + stops.join(',') + ')';
+      for (let t = -10; t <= 50; t += 10) { const sp = el('span', null, t); sp.style.left = ((t + 10) / 60 * 100) + '%'; tt.appendChild(sp); }
+      tt.appendChild(el('span', 'kpe-unit', '°C'));
     }
     bindUI() {
       const q = this.q;
@@ -97,8 +115,9 @@
       q('.kpe-africa').addEventListener('click', () => this.fit([[-26, -36], [60, 38]]));
       this.root.querySelectorAll('.kpe-layer').forEach(b => b.addEventListener('click', () => {
         const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', on);
-        if (b.dataset.layer === 'wind') { this.windOn = on; on ? this.runWind() : this.stopWind(); }
-        else { this.precipOn = on; this.map && this.map.getLayer('kpe-wx') && this.map.setLayoutProperty('kpe-wx', 'visibility', on ? 'visible' : 'none'); q('.kpe-legend').hidden = !on; }
+        const k = b.dataset.layer; if (k === 'wind') this.windOn = on; else if (k === 'temp') this.tempOn = on; else this.precipOn = on;
+        if (k === 'wind') { on ? this.runWind() : this.stopWind(); }
+        this.applyLayerState(); this.updateTheme();
       }));
       q('.kpe-op input').addEventListener('input', e => this.map && this.map.getLayer('kpe-wx') && this.map.setPaintProperty('kpe-wx', 'raster-opacity', e.target.value / 100));
       q('.kpe-model').addEventListener('change', e => { this.model = e.target.value; this.load(); });
@@ -163,11 +182,7 @@
       this.map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right');
       this.map.addControl(new mapboxgl.ScaleControl({ maxWidth: 110 }), 'bottom-left');
       this.map.on('load', () => {
-        const E = ForecastAdapter.EXTENT;
-        this.map.addSource('kpe-wx', { type: 'image', url: this.blank(), coordinates: [[E.west, E.north], [E.east, E.north], [E.east, E.south], [E.west, E.south]] });
-        const fs = this.map.getStyle().layers.find(l => l.type === 'symbol'), before = fs && fs.id;
-        this.map.addLayer({ id: 'kpe-wx', type: 'raster', source: 'kpe-wx', paint: { 'raster-opacity': this.q('.kpe-op input').value / 100, 'raster-fade-duration': 300, 'raster-resampling': 'linear' } }, before);
-        this.addCoast(before); this.addBorders(before); this.styleLabels(); this.initWind();
+        this.setupLayers(); this.initWind();
         this.map.on('click', e => { const f = this.map.queryRenderedFeatures(e.point).find(x => x.properties && x.properties.name); this.showPoint(e.lngLat, f && f.properties.name); });
         this.start();
       });
@@ -182,6 +197,37 @@
       });
     }
 
+    setupLayers() {   // first load, and again after every basemap switch (a new style drops custom sources and layers)
+      const map = this.map; if (map.getSource('kpe-wx')) return;
+      const E = ForecastAdapter.EXTENT, co = [[E.west, E.north], [E.east, E.north], [E.east, E.south], [E.west, E.south]];
+      if (map.setProjection) map.setProjection('mercator');
+      const fs = map.getStyle().layers.find(l => l.type === 'symbol'), before = fs && fs.id, op = this.q('.kpe-op input').value / 100;
+      ['tx', 'wx'].forEach(k => {   // temperature underneath, rainfall on top
+        map.addSource('kpe-' + k, { type: 'image', url: this.blank(), coordinates: co });
+        map.addLayer({ id: 'kpe-' + k, type: 'raster', source: 'kpe-' + k, paint: { 'raster-opacity': op, 'raster-fade-duration': 300, 'raster-resampling': 'linear' } }, before);
+      });
+      this.addCoast(before); this.addBorders(before); this.styleLabels(); this.applyLayerState();
+    }
+    // Wind on with no precipitation layer -> dark basemap (the white streamlines need the contrast); otherwise light.
+    updateTheme() {
+      const want = this.windOn && !this.precipOn ? 'dark' : 'light';
+      if (!this.map || want === this.theme) return;
+      this.theme = want; this.map.setStyle('mapbox://styles/mapbox/' + want + '-v11'); this.map.once('style.load', () => this.setupLayers());
+    }
+    applyLayerState() {
+      const m = this.map;
+      if (m && m.getLayer('kpe-wx') && m.getLayer('kpe-tx')) {
+        m.setLayoutProperty('kpe-wx', 'visibility', this.precipOn ? 'visible' : 'none'); m.setLayoutProperty('kpe-tx', 'visibility', this.tempOn ? 'visible' : 'none');
+        if (this.data) this.paintRaster(this.data);
+      }
+      this.q('.kpe-lgp').hidden = !this.precipOn; this.q('.kpe-lgt').hidden = !this.tempOn; this.q('.kpe-legend').hidden = !(this.precipOn || this.tempOn);
+    }
+    paintRaster(d) {   // draws only the layers that are switched on
+      const m = this.map, e = d.extent, co = [[e.west, e.north], [e.east, e.north], [e.east, e.south], [e.west, e.south]];
+      const sp = m.getSource('kpe-wx'), st = m.getSource('kpe-tx');
+      if (sp && this.precipOn) sp.updateImage({ url: this.frame(d, 'p'), coordinates: co });
+      if (st && this.tempOn && d.temp) st.updateImage({ url: this.frame(d, 't'), coordinates: co });
+    }
     blank() { const c = document.createElement('canvas'); c.width = c.height = 2; return c.toDataURL(); }
     flyTo(lon, lat, name) { this.map.flyTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), 8), duration: 900 }); this.showPoint({ lng: lon, lat }, name); }
 
@@ -232,17 +278,18 @@
       } catch (e) { if (e.name !== 'AbortError') this.msg(e.message); }
       finally { ld.hidden = true; }
     }
-    frame(d) {  // rendered raster per model/day/data-version, so slideshow frames are instant
-      const key = d.model + '|' + d.date + '|' + d.updated; let url = this.frames.get(key);
-      if (!url) { render(d, this.canvas); url = this.canvas.toDataURL('image/png'); this.frames.set(key, url); if (this.frames.size > 14) this.frames.delete(this.frames.keys().next().value); }
+    frame(d, kind) {  // rendered raster per layer/model/day/data-version, so slideshow frames are instant
+      const key = kind + '|' + d.model + '|' + d.date + '|' + d.updated; let url = this.frames.get(key);
+      if (!url) { kind === 't' ? renderGrid(tempGrid(d), this.canvas, TEMP) : renderGrid(rainGrid(d), this.canvas, RAIN); url = this.canvas.toDataURL('image/png'); this.frames.set(key, url); if (this.frames.size > 20) this.frames.delete(this.frames.keys().next().value); }
       return url;
     }
     async prefetch() {
       if (!this.data) return; const n = this.data.dates.length, next = this.data.dates[(this.idx() + 1) % n];
-      try { this.frame(await ForecastAdapter.getForecastData({ model: this.model, date: next, base: this.base })); } catch (e) { /* optional */ }
+      try { const nd = await ForecastAdapter.getForecastData({ model: this.model, date: next, base: this.base }); if (this.precipOn) this.frame(nd, 'p'); if (this.tempOn && nd.temp) this.frame(nd, 't'); } catch (e) { /* optional */ }
     }
     show(d) {
-      const e = d.extent; this.map.getSource('kpe-wx').updateImage({ url: this.frame(d), coordinates: [[e.west, e.north], [e.east, e.north], [e.east, e.south], [e.west, e.south]] });
+      this.paintRaster(d);
+      const tb2 = this.q('[data-layer="temp"]'); tb2.disabled = !d.temp; tb2.title = d.temp ? 'Temperature (2 m)' : 'No temperature data for this model/day';
       const days = this.q('.kpe-days');
       if (days.dataset.key !== d.model + d.dates.join()) {
         days.textContent = ''; days.dataset.key = d.model + d.dates.join();
@@ -252,7 +299,8 @@
       let active; days.querySelectorAll('.kpe-day').forEach(b => { const on = b.dataset.date === d.date; b.setAttribute('aria-selected', on); if (on) active = b; });
       this.markToday(); const isToday = d.date === todayEAT(), tb = this.q('.kpe-today'); tb.setAttribute('aria-pressed', isToday);
       if (active) days.scrollTo({ left: active.offsetLeft - days.clientWidth / 2 + active.offsetWidth / 2, behavior: 'smooth' });
-      this.q('.kpe-lg-cap').textContent = (d.date === todayEAT() ? 'Today · ' : '') + 'Precipitation ' + d.hours + ' h' + (d.partial ? ' (partial day)' : '') + ' · ' + eat(d.validStart) + ' → ' + eat(d.validEnd);
+      this.q('.kpe-tcap').textContent = d.temp ? 'Temperature 2 m · ' + eat(d.temp.time) : 'No temperature data';
+      this.q('.kpe-lgp .kpe-lg-cap').textContent = (d.date === todayEAT() ? 'Today · ' : '') + 'Precipitation ' + d.hours + ' h' + (d.partial ? ' (partial day)' : '') + ' · ' + eat(d.validStart) + ' → ' + eat(d.validEnd);
       this.q('.kpe-model').value = d.model; this.q('.kpe-run').textContent = 'Run ' + eat(d.run);
       const up = this.q('.kpe-updated'); up.textContent = 'updated ' + ago(d.updated); up.classList.toggle('stale', Date.now() - new Date(d.updated) > 14 * 3600e3);
       up.title = d.source + ' · ' + d.resolution + ' · wind ' + (d.wind ? eat(d.wind.time) : 'n/a');
@@ -271,6 +319,8 @@
       box.appendChild(el('div', 'kpe-pc', ll.lat.toFixed(3) + ', ' + ll.lng.toFixed(3)));
       if (label) box.appendChild(el('div', 'kpe-pn', label));
       const val = el('div', 'kpe-pv', v == null ? 'No data' : v.toFixed(1)); if (v != null) val.appendChild(el('small', null, ' mm')); box.appendChild(val);
+      const tv = this.data.temp ? sampleGrid(this.data.temp.values, this.data.temp.nx, this.data.temp.ny, this.data.temp.stepDeg, this.data.extent, ll.lng, ll.lat) : null;
+      if (tv != null) box.appendChild(el('div', 'kpe-pt', 'Temperature ' + tv.toFixed(1) + ' °C (2 m)'));
       box.appendChild(el('div', 'kpe-ps', this.data.modelLabel + ' · ' + dayLabel(this.date).t + ' · ' + this.data.hours + ' h (interpolated)'));
       const btn = el('button', 'kpe-fc', 'Show forecast'), list = el('div', 'kpe-fl'); btn.type = 'button'; list.hidden = true;
       btn.addEventListener('click', () => {
