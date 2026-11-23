@@ -126,3 +126,12 @@
 @container (max-width: 859px){
   .kenya-precipitation-explorer .kpe-zoom .kpe-jump{width:62px;height:40px;font-size:13px}
 }
+
+/* temperature layer: legend sections, popup line, wider compact panel */
+.kenya-precipitation-explorer .kpe-lgp + .kpe-lgt{margin-top:8px}
+.kenya-precipitation-explorer .kpe-tbar{background:#888}
+.kenya-precipitation-explorer .kpe-pt{font-size:14px;color:#cfe3ff;margin:0 0 4px}
+.kenya-precipitation-explorer .kpe-layer:disabled{opacity:.45;cursor:not-allowed}
+@container (max-width: 859px){
+  .kenya-precipitation-explorer .kpe-layers{width:148px}
+}
