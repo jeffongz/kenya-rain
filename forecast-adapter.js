@@ -55,6 +55,9 @@
       model, modelLabel: MODELS[model].label, resolution: r.resolution, run: r.run, date: day.date, validStart: day.start, validEnd: day.end,
       hours: day.hours, partial: !!day.partial, extent: e, lons, lats, values, units: r.units, source: r.source, updated: r.updated,
       dates: r.days.map(x => x.date), gridStepDeg: r.step,
+      temp: day.temp ? (() => { const sd = day.temp.step_deg, tx = Math.round((e.east - e.west) / sd) + 1, ty = Math.round((e.north - e.south) / sd) + 1, rows = [];
+        for (let y = 0; y < ty; y++) rows.push(day.temp.values.slice(y * tx, (y + 1) * tx));
+        return { time: day.temp.time, step: day.temp.step, stepDeg: sd, nx: tx, ny: ty, values: rows }; })() : null,
       wind: day.wind ? { time: day.wind.time, step: day.wind.step, stepDeg: day.wind.step_deg, u: day.wind.u, v: day.wind.v,
         nx: Math.round((e.east - e.west) / day.wind.step_deg) + 1, ny: Math.round((e.north - e.south) / day.wind.step_deg) + 1 } : null
     };
