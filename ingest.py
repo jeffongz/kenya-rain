@@ -142,11 +142,11 @@ ZERO = np.zeros((len(LAT), len(LON)))
 def ecmwf_wind(client, run, steps):
     with tempfile.TemporaryDirectory() as td:
         tgt = os.path.join(td, 'uv.grib2')
-        client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=steps, param=['10u', '10v'], target=tgt)
+        client.retrieve(date=run.strftime('%Y%m%d'), time=run.hour, stream='oper', type='fc', step=steps, param=['10u', '10v', '2t'], target=tgt)
         got = {}
         for m in read_msgs(tgt):
             got.setdefault(int(m['step']), {})[m['name']] = regrid(m, m['val'])
-    return {s: (d['10u'], d['10v']) for s, d in got.items() if '10u' in d and '10v' in d}
+    return {s: dict(u=d.get('10u'), v=d.get('10v'), t=(d['2t'] - 273.15 if '2t' in d else None)) for s, d in got.items()}
 
 
 # ---------------- ECMWF IFS open data (CC-BY-4.0) via the official ecmwf-opendata client ----------------
@@ -205,14 +205,14 @@ def gfs_wind(run, steps):
         lines = http(gfs_url(run, f) + '.idx').decode().splitlines(); got = {}
         for i, ln in enumerate(lines):
             p = ln.split(':')
-            if len(p) > 4 and p[3] in ('UGRD', 'VGRD') and p[4] == '10 m above ground':
+            if len(p) > 4 and ((p[3] in ('UGRD', 'VGRD') and p[4] == '10 m above ground') or (p[3] == 'TMP' and p[4] == '2 m above ground')):
                 end = int(lines[i + 1].split(':')[1]) - 1 if i + 1 < len(lines) else ''
                 with tempfile.NamedTemporaryFile(suffix='.grib2') as tf:
                     tf.write(http(gfs_url(run, f), '%s-%s' % (p[1], end))); tf.flush()
                     m = read_msgs(tf.name)[0]
                 got[p[3]] = regrid(m, m['val'])
-        if len(got) == 2:
-            out[f] = (got['UGRD'], got['VGRD'])
+        if got:
+            out[f] = dict(u=got.get('UGRD'), v=got.get('VGRD'), t=(got['TMP'] - 273.15 if 'TMP' in got else None))
     return out
 
 
@@ -278,11 +278,14 @@ def fetch_icon():
         def wind_icon():
             out = {}
             for s in sorted({mid_step(w, avail) for w in wins}):
-                uv = []
-                for var in ('U_10M', 'V_10M'):
-                    v = grab(var, var.lower(), s, 'single-level')[m][idx].astype(float); v[d > 0.3] = np.nan
-                    uv.append(v.reshape(len(LAT), len(LON)))
-                out[s] = tuple(uv)
+                f = {}
+                for key, var in (('u', 'U_10M'), ('v', 'V_10M'), ('t', 'T_2M')):
+                    try:
+                        v = grab(var, var.lower(), s, 'single-level')[m][idx].astype(float); v[d > 0.3] = np.nan
+                        f[key] = v.reshape(len(LAT), len(LON)) - (273.15 if key == 't' else 0)
+                    except Exception as e:
+                        print('  icon', var, 'skipped:', str(e)[:80], flush=True)
+                out[s] = f
             return out
         wind = safe(wind_icon)
         return run, wins, cum, 'DWD ICON open data (CC BY 4.0)', '~13 km native, 0.25° shown', wind
@@ -348,8 +351,11 @@ def main(names):
                     k = min(wind, key=lambda s: abs(s - (w['a'] + w['b']) / 2))
                     if abs(k - (w['a'] + w['b']) / 2) <= 6:
                         cell = lambda a: [None if np.isnan(x) else round(float(x), 1) for x in a[::2, ::2].ravel()]
-                        days[-1]['wind'] = dict(step=k, time=(run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'), step_deg=STEP * 2,
-                                                u=cell(wind[k][0]), v=cell(wind[k][1]))
+                        tm = (run + dt.timedelta(hours=k)).strftime('%Y-%m-%dT%H:%M:%SZ'); fl = wind[k]
+                        if fl.get('u') is not None and fl.get('v') is not None:
+                            days[-1]['wind'] = dict(step=k, time=tm, step_deg=STEP * 2, u=cell(fl['u']), v=cell(fl['v']))
+                        if fl.get('t') is not None:   # 2 m temperature (deg C) at the same snapshot time
+                            days[-1]['temp'] = dict(step=k, time=tm, step_deg=STEP * 2, values=cell(fl['t']))
             upd = dt.datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
             fname = write_unique(name, run, dict(model=name, run=run.strftime('%Y-%m-%dT%H:%M:%SZ'), resolution=res, source=source,
                                  updated=upd, units='mm', extent=dict(west=W, east=E, south=S, north=N), step=STEP, days=days))
